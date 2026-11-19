@@ -924,6 +924,8 @@ impl App {
             return;
         }
         self.remote.form = None;
+        // SSH 面板发起的连接一律进入管理工作区，避免沿用上一次残留的 After。
+        self.remote.after = After::SshWorkspace;
         self.remote_open(target, String::new(), After::SshWorkspace);
     }
 
@@ -1498,7 +1500,13 @@ impl App {
             self.update_state(|state| state.set_remote_key(target.as_str(), &key));
         }
         self.remote.form = Some((host, port));
-        self.remote_open(target, String::new(), After::Browse);
+        // 从 SSH 面板「新建」进来时进入管理工作区；否则是编辑器原有的「打开远端目录」流程。
+        let after = if self.remote.adding_host {
+            After::SshWorkspace
+        } else {
+            After::Browse
+        };
+        self.remote_open(target, String::new(), after);
         self.request_redraw();
     }
 
@@ -1770,7 +1778,11 @@ impl App {
                 self.open_remote_browser(target, home);
             }
             Ok(reached) if self.remote_enabled() && self.remote.after == After::SshWorkspace => {
-                // 连接成功：进入 SSH 管理工作区。
+                // 连接成功：关闭连接对话框，进入 SSH 管理工作区。
+                self.remote.form = None;
+                if self.overlays.form_dialog.is_some() {
+                    self.close_form_dialog();
+                }
                 let folder = reached.into_folder();
                 let home = winc_backend::native_lossy(&folder).into_owned();
                 self.ssh_workspace_connected(target, home);

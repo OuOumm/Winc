@@ -346,6 +346,14 @@ impl App {
         if let Some(t) = hit(&self.hits.ssh_ws, x, y) {
             return Target::SshWs(t);
         }
+        // SSH 视图的侧栏区域整体拦截：它没有文件树，点击不该落到下方的文件树逻辑上。
+        if self.panels.sidebar.visible
+            && self.panels.sidebar.view == SidebarView::Ssh
+            && self.layout.sidebar.contains(x, y)
+            && y >= self.layout.sidebar_header.bottom()
+        {
+            return Target::Blocked;
+        }
         if let Some(hover) = self.panel_hover_at(x, y) {
             return Target::Panel(hover);
         }

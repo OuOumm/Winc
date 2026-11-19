@@ -21,7 +21,23 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let Some(ws) = app.remote.ws.clone() else {
         return;
     };
+    let p = app.palette;
     let parts = Parts::new(app.layout.editor);
+
+    // 终端还没建好（辅助进程握手期间）时，在终端栏位置给出提示；
+    // 建好后由全局终端面板在同一矩形里绘制。
+    if app.terminal.tabs.is_empty() {
+        frame.rect_clipped(parts.terminal, p.popup_bg, crate::theme::RADIUS_ROW, parts.terminal);
+        ui_text_small(
+            frame,
+            app,
+            parts.terminal.x + PAD,
+            Rect::new(parts.terminal.x, parts.terminal.y + PAD, parts.terminal.w, 20.0),
+            t!("workspace-ssh-terminal-pending"),
+            p.text_dim,
+            parts.terminal,
+        );
+    }
 
     // 会话标签栏。
     draw_tabs(app, frame, parts.tabs, &ws);
