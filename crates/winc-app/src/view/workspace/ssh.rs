@@ -24,11 +24,42 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let bar = ContextBar::new(app, frame);
     super::sidebar::draw_context_bar(app, frame, &bar, header.right() - 8.0);
 
-    // 资产列表区域：第二行以下到侧栏底部。
-    let list = Rect::new(sidebar.x, header.bottom() + 4.0, sidebar.w, (sidebar.bottom() - header.bottom() - 4.0).max(0.0));
+    // 资产列表区域：第二行以下到侧栏底部（上方留出搜索框）。
+    let search_h = 26.0;
+    let list = Rect::new(
+        sidebar.x,
+        header.bottom() + 4.0 + search_h,
+        sidebar.w,
+        (sidebar.bottom() - header.bottom() - 4.0 - search_h).max(0.0),
+    );
     let list_clip = list.intersect(sidebar);
 
-    let assets = app.ssh_assets();
+    // 资产搜索框：按主机名、地址或端口筛选。
+    let search = Rect::new(
+        sidebar.x + 8.0,
+        header.bottom() + 4.0,
+        (sidebar.w - 16.0).max(0.0),
+        search_h - 4.0,
+    );
+    frame.rect_clipped(search, p.popup_bg, crate::theme::RADIUS_ROW, sidebar);
+    let (text, color) = if app.remote.asset_filter.is_empty() {
+        (t!("workspace-ssh-search").to_string(), p.text_dim)
+    } else {
+        (app.remote.asset_filter.clone(), p.text)
+    };
+    ui_text_small(frame, app, search.x + 8.0, search, &text, color, sidebar);
+    app.hits
+        .ssh_ws
+        .push((search, crate::app::ssh_monitor::SshWsTarget::AssetSearch));
+
+    let assets_all = app.ssh_assets();
+    let filter = app.remote.asset_filter.to_lowercase();
+    // 保留原始下标：点击与移除都按配置中的顺序引用。
+    let assets: Vec<(usize, String)> = assets_all
+        .into_iter()
+        .enumerate()
+        .filter(|(_, h)| filter.is_empty() || h.to_lowercase().contains(&filter))
+        .collect();
     let title = t!("workspace-sidebar-ssh-assets");
     let title_row = Rect::new(list.x, list.y, list.w, 24.0);
     ui_text_small(
@@ -62,12 +93,12 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         return;
     }
 
-    for (i, host) in assets.iter().enumerate() {
+    for (real, host) in &assets {
         let row = Rect::new(list.x + 4.0, y, list.w - 8.0, ROW);
         if row.bottom() > list.bottom() + ROW {
             break;
         }
-        let selected = i == app.remote.asset_selection;
+        let selected = *real == app.remote.asset_selection;
         if selected {
             frame.rect_clipped(row, p.selection, crate::theme::RADIUS_ROW, list_clip);
         }
@@ -88,8 +119,8 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         ui_text_small(frame, app, remove.x, remove, "✕", p.text_dim, list_clip);
         app.hits
             .ssh_ws
-            .push((remove, crate::app::ssh_monitor::SshWsTarget::RemoveHost(i)));
-        app.hits.ssh_ws.push((row, crate::app::ssh_monitor::SshWsTarget::Asset(i)));
+            .push((remove, crate::app::ssh_monitor::SshWsTarget::RemoveHost(*real)));
+        app.hits.ssh_ws.push((row, crate::app::ssh_monitor::SshWsTarget::Asset(*real)));
         y += ROW;
     }
 

@@ -68,6 +68,12 @@ pub(crate) enum SshWsTarget {
     NewHost,
     /// 从 `~/.ssh/config` 删除资产行对应的主机。
     RemoveHost(usize),
+    /// 在当前远端目录新建文件夹。
+    MkDir,
+    /// 聚焦进程过滤框。
+    ProcFilter,
+    /// 聚焦资产搜索框。
+    AssetSearch,
 }
 
 /// 一个 SSH 会话。
@@ -92,10 +98,29 @@ pub(crate) struct Session {
 pub(crate) struct Workspace {
     pub(crate) sessions: Vec<Session>,
     pub(crate) active: usize,
-    /// 当前目录的文件条目：(名称, 是否目录, 大小文字, 修改时间, 权限)。
-    pub(crate) files: Vec<(String, bool, String, String, String)>,
+    /// 当前目录的文件条目。
+    pub(crate) files: Vec<FileEntry>,
     /// 目录读取失败的原因。
     pub(crate) file_error: Option<String>,
+    /// 进程过滤关键字。
+    pub(crate) proc_filter: String,
+}
+
+impl Workspace {
+    /// 按当前过滤关键字筛出的进程下标与条目。
+    ///
+    /// 关键字匹配进程名或 PID（不区分大小写）；关键字为空时全部返回。
+    pub(crate) fn filtered_processes<'a>(
+        &'a self,
+        processes: &'a [(String, String, f32, String)],
+    ) -> impl Iterator<Item = (usize, &'a (String, String, f32, String))> + 'a {
+        let needle = self.proc_filter.to_lowercase();
+        processes.iter().enumerate().filter(move |(_, (pid, name, ..))| {
+            needle.is_empty()
+                || name.to_lowercase().contains(&needle)
+                || pid.contains(&needle)
+        })
+    }
 }
 
 impl Workspace {
@@ -123,8 +148,22 @@ pub(crate) fn monitor_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
-/// 文件列表条目：(名称, 是否目录, 大小文字, 修改时间, 权限)。
-pub(crate) type FileEntry = (String, bool, String, String, String);
+/// 文件列表中的一个条目。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FileEntry {
+    /// 名称。
+    pub(crate) name: String,
+    /// 是否目录。
+    pub(crate) is_dir: bool,
+    /// 权限文字（`-rw-r--r--`）。
+    pub(crate) perm: String,
+    /// 属主与属组（`root/root`）。
+    pub(crate) owner: String,
+    /// 大小文字。
+    pub(crate) size: String,
+    /// 修改时间。
+    pub(crate) time: String,
+}
 
 /// 文件列表回传槽：原始条目或错误。
 pub(crate) type FilesResult = Result<Vec<FileEntry>, String>;

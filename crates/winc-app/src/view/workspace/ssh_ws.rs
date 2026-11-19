@@ -7,7 +7,7 @@ use winc_i18n::t;
 use winc_render::{Color, Frame, Rect, Stroke};
 
 use super::*;
-use crate::app::ssh_monitor::{self, Parts};
+use crate::app::ssh_monitor::{self, Parts, SshWsTarget};
 
 /// 行高（逻辑像素）。
 const ROW: f32 = 22.0;
@@ -60,65 +60,105 @@ fn draw_tabs(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_monitor:
     app.hits.ssh_ws.push((btn, crate::app::ssh_monitor::SshWsTarget::Refresh));
 }
 
-/// 绘制远程文件列表。
+/// 绘制远程文件列表：目录行 + 表头 + 多列文件表 + 底部统计。
 fn draw_files(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_monitor::Workspace) {
     let p = app.palette;
     if rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
     frame.rect_clipped(rect, p.popup_bg, crate::theme::RADIUS_ROW, rect);
-    // 标题：当前目录 + 文件数。
-    let head = Rect::new(rect.x, rect.y, rect.w, HEAD);
-    let session = ws.active();
-    let dir = session.map(|s| s.cwd.clone()).unwrap_or_default();
-    let title = format!("{}  ·  {} items", dir, ws.files.len());
-    ui_text_small(frame, app, rect.x + PAD, head, &title, p.text_muted, rect);
-    // 上传按钮。
-    let upload = Rect::new(rect.right() - 116.0, rect.y + 2.0, 44.0, HEAD - 4.0);
-    frame.rect_clipped(upload, p.hover, crate::theme::RADIUS_ROW, rect);
-    ui_text_small(frame, app, upload.x + 5.0, upload, &format!("↑ {}", t!("workspace-ssh-upload")), p.text_muted, rect);
-    app.hits.ssh_ws.push((upload, crate::app::ssh_monitor::SshWsTarget::Upload));
-    // 返回上级按钮。
-    let up = Rect::new(rect.right() - 68.0, rect.y + 2.0, 64.0, HEAD - 4.0);
-    frame.rect_clipped(up, p.hover, crate::theme::RADIUS_ROW, rect);
-    ui_text_small(frame, app, up.x + 6.0, up, &format!("↑ {}", t!("workspace-ssh-up")), p.text_muted, rect);
-    app.hits.ssh_ws.push((up, crate::app::ssh_monitor::SshWsTarget::FileUp));
 
-    let list_y = rect.y + HEAD;
-    let mut y = list_y;
-    for (i, (name, is_dir, size, time, _perm)) in ws.files.iter().enumerate() {
-        if y + ROW > rect.bottom() {
+    // 标题行：当前目录。
+    let head = Rect::new(rect.x, rect.y, rect.w, HEAD);
+    let dir = ws.active().map(|s| s.cwd.clone()).unwrap_or_default();
+    let title = if dir.is_empty() { "/".to_owned() } else { dir };
+    let title_max = (rect.w - 190.0).max(40.0);
+    let shown = truncate_end(frame, &title, app.fonts.ui_small, title_max);
+    ui_text_small(frame, app, rect.x + PAD, head, &shown, p.text_muted, rect);
+
+    // 右侧三个按钮：新建目录、上传、上级。
+    let mut bx = rect.right() - 6.0;
+    for (label, target) in [
+        (t!("workspace-ssh-up").to_string(), SshWsTarget::FileUp),
+        (t!("workspace-ssh-upload").to_string(), SshWsTarget::Upload),
+        (t!("workspace-ssh-mkdir").to_string(), SshWsTarget::MkDir),
+    ] {
+        let text = format!("{} {}", if target == SshWsTarget::FileUp { "↑" } else { "＋" }, label);
+        let w = frame.measure(FontKind::Ui, app.fonts.ui_small, &text) + 12.0;
+        let b = Rect::new(bx - w, rect.y + 2.0, w, HEAD - 4.0);
+        frame.rect_clipped(b, p.hover, crate::theme::RADIUS_ROW, rect);
+        ui_text_small(frame, app, b.x + 6.0, b, &text, p.text_muted, rect);
+        app.hits.ssh_ws.push((b, target));
+        bx = b.x - 4.0;
+    }
+
+    // 表头：名称 / 修改时间 / 大小 / 权限 / 属主。
+    let header_y = rect.y + HEAD;
+    let header = Rect::new(rect.x, header_y, rect.w, 18.0);
+    frame.rect_clipped(header, p.hover.alpha(0.35), 0.0, rect);
+    let cols = column_layout(rect.w);
+    for (i, name) in ["名称", "修改时间", "大小", "权限", "属主"].iter().enumerate() {
+        ui_text_small(frame, app, rect.x + PAD + cols[i], header, name, p.text_dim, rect);
+    }
+
+    // 文件行。
+    let mut y = header.bottom() + 2.0;
+    for i in 0..ws.files.len() {
+        if y + ROW > rect.bottom() - 18.0 {
             break;
         }
-        let row = Rect::new(rect.x + 2.0, y, rect.w - 4.0, ROW);
+        let Some(entry) = ws.files.get(i) else { break };
+        let row = Rect::new(rect.x + 2.0, y, rect.w - 8.0, ROW);
         if i % 2 == 1 {
-            frame.rect_clipped(row, p.hover.alpha(0.5), 0.0, rect);
+            frame.rect_clipped(row, p.hover.alpha(0.45), 0.0, rect);
         }
-        let icon = if *is_dir { "📁" } else { "📄" };
+        let icon = if entry.is_dir { "📁" } else { "📄" };
         ui_text_small(frame, app, row.x + PAD, row, icon, p.text_muted, rect);
-        ui_text_small(frame, app, row.x + PAD + 20.0, row, name, p.text, rect);
-        // 右侧显示大小与时间。
-        let meta = format!("{size}  {time}");
-        let mw = frame.measure(FontKind::Ui, app.fonts.ui_small, &meta);
-        ui_text_small(frame, app, row.right() - PAD - mw, row, &meta, p.text_dim, rect);
-        // 文件行右端加下载按钮。
-        if !*is_dir {
-            let dl = Rect::new(row.right() - 14.0, row.y + 3.0, 14.0, ROW - 6.0);
+        ui_text_small(frame, app, row.x + PAD + cols[0], row, &entry.name, p.text, rect);
+        ui_text_small(frame, app, row.x + PAD + cols[1], row, &entry.time, p.text_dim, rect);
+        ui_text_small(frame, app, row.x + PAD + cols[2], row, &entry.size, p.text_dim, rect);
+        ui_text_small(frame, app, row.x + PAD + cols[3], row, &entry.perm, p.text_dim, rect);
+        ui_text_small(frame, app, row.x + PAD + cols[4], row, &entry.owner, p.text_dim, rect);
+        // 非目录行右端：下载按钮。
+        if !entry.is_dir {
+            let dl = Rect::new(row.right() - 16.0, row.y + 3.0, 14.0, ROW - 6.0);
             ui_text_small(frame, app, dl.x, dl, "⇩", p.accent, rect);
-            app.hits.ssh_ws.push((dl, crate::app::ssh_monitor::SshWsTarget::Download(i)));
+            app.hits.ssh_ws.push((dl, SshWsTarget::Download(i)));
         }
-        app.hits.ssh_ws.push((row, crate::app::ssh_monitor::SshWsTarget::File(i)));
+        app.hits.ssh_ws.push((row, SshWsTarget::File(i)));
         y += ROW;
     }
+
     if let Some(err) = &ws.file_error {
-        ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, list_y, rect.w, ROW), err, p.error, rect);
+        ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, ROW), err, p.error, rect);
+    } else if ws.files.is_empty() {
+        ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, ROW), t!("workspace-ssh-empty"), p.text_dim, rect);
     }
-    if ws.files.is_empty() && ws.file_error.is_none() {
-        ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, list_y, rect.w, ROW), t!("workspace-ssh-empty"), p.text_dim, rect);
-    }
+
+    // 底部统计：共 N 个文件、M 个文件夹。
+    let files = ws.files.iter().filter(|e| !e.is_dir).count();
+    let dirs = ws.files.iter().filter(|e| e.is_dir).count();
+    let foot = Rect::new(rect.x, rect.bottom() - 18.0, rect.w, 18.0);
+    frame.rect_clipped(foot, p.hover.alpha(0.25), 0.0, rect);
+    let text = t!(
+        "workspace-ssh-file-count",
+        files = files,
+        dirs = dirs
+    );
+    ui_text_small(frame, app, rect.x + PAD, foot, &text, p.text_dim, rect);
 }
 
-/// 绘制服务器概览。
+/// 文件表各列的横向偏移（相对内容起点），依次为名称、时间、大小、权限、属主。
+fn column_layout(width: f32) -> [f32; 5] {
+    let name = 0.0;
+    let time = (width * 0.40).max(120.0);
+    let size = time + 108.0;
+    let perm = size + 66.0;
+    let owner = perm + 86.0;
+    [name, time, size, perm, owner]
+}
+
+/// 绘制服务器概览：系统信息、CPU（含每核心）、内存/Swap、网络、磁盘、进程。
 fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_monitor::Workspace) {
     let p = app.palette;
     if rect.w <= 0.0 || rect.h <= 0.0 {
@@ -129,13 +169,12 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
         return;
     };
     let ov = &session.overview;
-    let mut y = rect.y + PAD;
 
-    // 标题行：主机 + 状态。
+    // 标题行：主机 + 在线状态。
     let live = if ov.updated.is_some() { "● " } else { "○ " };
     let title = format!("{}{} — {}", live, t!("workspace-ssh-overview"), session.target.host());
-    ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, 18.0), &title, p.text, rect);
-    y += 20.0;
+    ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, rect.y + PAD, rect.w, 18.0), &title, p.text, rect);
+    let mut y = rect.y + PAD + 22.0;
 
     if let Some(err) = &session.error {
         ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, 18.0), err, p.error, rect);
@@ -143,28 +182,65 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
     }
 
     // 系统信息（两列）。
-    for (k, v) in ov.system.iter().take(6) {
+    section_title(app, frame, rect, &mut y, "系统信息");
+    for (k, v) in ov.system.iter() {
         if y + 16.0 > rect.bottom() {
             return;
         }
         let row = Rect::new(rect.x, y, rect.w, 16.0);
         ui_text_small(frame, app, rect.x + PAD, row, k, p.text_dim, rect);
-        let vx = rect.x + 92.0;
-        ui_text_small(frame, app, vx, row, v, p.text, rect);
+        let shown = truncate_end(frame, v, app.fonts.ui_small, (rect.w - 110.0).max(40.0));
+        ui_text_small(frame, app, rect.x + 84.0, row, &shown, p.text, rect);
         y += 16.0;
     }
 
-    // CPU / 内存进度条。
-    y = draw_bar(app, frame, rect, y, t!("workspace-ssh-cpu"), ov.cpu_total, p.accent);
-    let mem_pct = if ov.memory.1 > 0 {
-        ov.memory.0 as f32 / ov.memory.1 as f32 * 100.0
-    } else {
-        0.0
-    };
-    y = draw_bar(app, frame, rect, y, t!("workspace-ssh-memory"), mem_pct, p.accent.alpha(0.65));
+    // CPU：总占用 + 每核心。
+    y += 6.0;
+    section_title(app, frame, rect, &mut y, "CPU");
+    y = draw_bar(app, frame, rect, y, "总占用", ov.cpu_total, p.accent);
+    if !ov.cpu_cores.is_empty() && y + 20.0 < rect.bottom() {
+        // 每核心两列，最多显示 8 个。
+        let per = (rect.w - 2.0 * PAD - 12.0) / 2.0;
+        for (i, core) in ov.cpu_cores.iter().take(8).enumerate() {
+            let col = i % 2;
+            let row_i = i / 2;
+            let x = rect.x + PAD + col as f32 * (per + 12.0);
+            let ry = y + row_i as f32 * 18.0;
+            if ry + 14.0 > rect.bottom() {
+                break;
+            }
+            let label = format!("CPU{i}");
+            ui_text_small(frame, app, x, Rect::new(x, ry, per, 14.0), &label, p.text_dim, rect);
+            let bar = Rect::new(x + 38.0, ry + 5.0, (per - 44.0).max(10.0), 4.0);
+            frame.rect_clipped(bar, p.hover, 2.0, rect);
+            let w = bar.w * (core / 100.0).clamp(0.0, 1.0);
+            let color = if *core > 80.0 {
+                p.error
+            } else if *core > 50.0 {
+                p.warning
+            } else {
+                p.accent
+            };
+            frame.rect_clipped(Rect::new(bar.x, bar.y, w, bar.h), color, 2.0, rect);
+        }
+        y += ov.cpu_cores.len().min(8).div_ceil(2) as f32 * 18.0 + 4.0;
+    }
+    if y + 16.0 < rect.bottom() {
+        let load = format!("负载 {:.2} / {:.2} / {:.2}", ov.load[0], ov.load[1], ov.load[2]);
+        ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, 16.0), &load, p.text_muted, rect);
+        y += 18.0;
+    }
 
-    // 网络：速率文字 + 折线（下行蓝、上行绿）。
+    // 内存与 Swap。
+    section_title(app, frame, rect, &mut y, "内存 / 交换");
+    let mem_used = format!("{} / {}", fmt_mb(ov.memory.0), fmt_mb(ov.memory.1));
+    y = draw_bar_with(app, frame, rect, y, ("物理内存", mem_used), (pct(ov.memory.0, ov.memory.1), p.accent));
+    let swap_used = format!("{} / {}", fmt_mb(ov.swap.0), fmt_mb(ov.swap.1));
+    y = draw_bar_with(app, frame, rect, y, ("Swap", swap_used), (pct(ov.swap.0, ov.swap.1), p.accent.alpha(0.6)));
+
+    // 网络：速率 + 折线 + 接口。
     if y + 40.0 < rect.bottom() {
+        section_title(app, frame, rect, &mut y, "网络");
         let rx = format_rate(ov.net_rx_now);
         let tx = format_rate(ov.net_tx_now);
         let row = Rect::new(rect.x, y, rect.w, 16.0);
@@ -176,47 +252,114 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
         if !ov.net_rx.is_empty() {
             y = draw_spark(app, frame, rect, y, (&ov.net_rx, &ov.net_tx), (p.accent, p.text_muted));
         }
-    }
-
-    // 网络接口（前 2 个）。
-    for (name, detail) in ov.interfaces.iter().take(2) {
-        if y + 16.0 > rect.bottom() {
-            break;
-        }
-        let label = format!("{name}  {detail}");
-        let row = Rect::new(rect.x, y, rect.w, 16.0);
-        ui_text_small(frame, app, rect.x + PAD, row, &label, p.text_dim, rect);
-        y += 16.0;
-    }
-
-    // 磁盘挂载（前 4 个）。
-    for (mount, _fs, pct, used) in ov.mounts.iter().take(4) {
-        if y + 18.0 > rect.bottom() {
-            break;
-        }
-        let label = format!("{mount}  {used}  {pct}%");
-        let row = Rect::new(rect.x, y, rect.w, 16.0);
-        ui_text_small(frame, app, rect.x + PAD, row, &label, p.text_muted, rect);
-        y += 16.0;
-    }
-
-    // 进程列表（前若干行，超出裁剪）。
-    if y + 20.0 < rect.bottom() {
-        ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, 18.0), t!("workspace-ssh-processes"), p.text_dim, rect);
-        y += 18.0;
-        for (pi, (pid, name, cpu, mem)) in ov.processes.iter().take(6).enumerate() {
-            if y + 16.0 > rect.bottom() {
+        for (name, detail) in ov.interfaces.iter().take(3) {
+            if y + 15.0 > rect.bottom() {
                 break;
             }
-            let label = format!("{pid:>6}  {name:<16} {cpu:>5.1}%  {mem:>8}");
-            let row = Rect::new(rect.x, y, rect.w, 16.0);
-            ui_text_small(frame, app, rect.x + PAD, row, &label, p.text, rect);
-            let kill = Rect::new(row.right() - 30.0, y, 26.0, 16.0);
-            ui_text_small(frame, app, kill.x, kill, "kill", p.error, rect);
-            app.hits.ssh_ws.push((kill, crate::app::ssh_monitor::SshWsTarget::KillProc(pi)));
-            y += 16.0;
+            let text = format!("{name}  {detail}");
+            let shown = truncate_end(frame, &text, app.fonts.ui_small, rect.w - 2.0 * PAD);
+            ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, 15.0), &shown, p.text_dim, rect);
+            y += 15.0;
         }
     }
+
+    // 磁盘挂载。
+    if y + 20.0 < rect.bottom() {
+        section_title(app, frame, rect, &mut y, "磁盘挂载");
+        for (mount, fs, percent, used) in ov.mounts.iter().take(4) {
+            if y + 24.0 > rect.bottom() {
+                break;
+            }
+            let label = format!("{mount} · {fs}");
+            ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y, rect.w, 14.0), &label, p.text_muted, rect);
+            ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, y + 14.0, rect.w, 12.0), used, p.text_dim, rect);
+            let bar = Rect::new(rect.x + PAD, y + 27.0, rect.w - 2.0 * PAD, 3.0);
+            frame.rect_clipped(bar, p.hover, 1.5, rect);
+            let w = bar.w * (*percent as f32 / 100.0).clamp(0.0, 1.0);
+            let color = if *percent > 85 { p.error } else if *percent > 65 { p.warning } else { p.accent };
+            frame.rect_clipped(Rect::new(bar.x, bar.y, w, bar.h), color, 1.5, rect);
+            y += 34.0;
+        }
+    }
+
+    // 进程：过滤框 + 列表 + kill。
+    if y + 22.0 < rect.bottom() {
+        section_title(app, frame, rect, &mut y, "进程");
+        let filter = Rect::new(rect.x + PAD, y, rect.w - 2.0 * PAD, 18.0);
+        frame.rect_clipped(filter, p.hover.alpha(0.5), 4.0, rect);
+        let text = if ws.proc_filter.is_empty() {
+            t!("workspace-ssh-proc-filter").to_string()
+        } else {
+            ws.proc_filter.clone()
+        };
+        let color = if ws.proc_filter.is_empty() { p.text_dim } else { p.text };
+        ui_text_small(frame, app, filter.x + 6.0, filter, &text, color, rect);
+        app.hits
+            .ssh_ws
+            .push((filter, SshWsTarget::ProcFilter));
+        y += 22.0;
+
+        for (index, (pid, name, cpu, mem)) in ws.filtered_processes(&ov.processes).take(8) {
+            if y + 15.0 > rect.bottom() {
+                break;
+            }
+            let row = Rect::new(rect.x, y, rect.w, 15.0);
+            let label = format!("{pid:>6}  {name}  {cpu:.1}%  {mem}");
+            let shown = truncate_end(frame, &label, app.fonts.ui_small, rect.w - 2.0 * PAD - 26.0);
+            ui_text_small(frame, app, rect.x + PAD, row, &shown, p.text, rect);
+            let kill = Rect::new(row.right() - 30.0, y, 24.0, 15.0);
+            ui_text_small(frame, app, kill.x, kill, "✕", p.error, rect);
+            app.hits.ssh_ws.push((kill, SshWsTarget::KillProc(index)));
+            y += 15.0;
+        }
+    }
+}
+
+/// 小节标题。
+fn section_title(app: &mut App, frame: &mut Frame<'_>, rect: Rect, y: &mut f32, text: &str) {
+    if *y + 18.0 > rect.bottom() {
+        return;
+    }
+    ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, *y, rect.w, 16.0), text, app.palette.text_muted, rect);
+    *y += 18.0;
+}
+
+/// 百分比。
+fn pct(used: u64, total: u64) -> f32 {
+    if total == 0 { 0.0 } else { used as f32 / total as f32 * 100.0 }
+}
+
+/// MB 数格式化成 MB/GB。
+fn fmt_mb(mb: u64) -> String {
+    if mb >= 1024 {
+        format!("{:.1} GB", mb as f64 / 1024.0)
+    } else {
+        format!("{mb} MB")
+    }
+}
+
+/// 画一条带数值文字的进度条（标签 + 右侧数值 + 条），返回下一行的 y。
+fn draw_bar_with(
+    app: &mut App,
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    y: f32,
+    (label, value): (&str, String),
+    (pct, color): (f32, Color),
+) -> f32 {
+    let p = app.palette;
+    if y + 24.0 > rect.bottom() {
+        return y;
+    }
+    let row = Rect::new(rect.x, y, rect.w, 14.0);
+    ui_text_small(frame, app, rect.x + PAD, row, label, p.text_dim, rect);
+    let tw = frame.measure(FontKind::Ui, app.fonts.ui_small, &value);
+    ui_text_small(frame, app, rect.right() - PAD - tw, row, &value, p.text, rect);
+    let bar = Rect::new(rect.x + PAD, y + 15.0, rect.w - 2.0 * PAD, 4.0);
+    frame.rect_clipped(bar, p.hover, 2.0, rect);
+    let w = bar.w * (pct / 100.0).clamp(0.0, 1.0);
+    frame.rect_clipped(Rect::new(bar.x, bar.y, w, bar.h), color, 2.0, rect);
+    y + 25.0
 }
 
 /// 画一条百分比进度条，返回下一行的 y。
