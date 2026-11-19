@@ -38,6 +38,10 @@ impl App {
         }
 
         let m = self.pointer.modifiers;
+        // SSH 的过滤框在接收输入时，字符先进对应关键字。
+        if (self.remote.proc_editing || self.remote.asset_editing) && self.ssh_filter_key(event) {
+            return;
+        }
         let cmd = if cfg!(target_os = "macos") {
             m.super_key()
         } else {

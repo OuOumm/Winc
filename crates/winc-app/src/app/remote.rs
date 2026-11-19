@@ -206,6 +206,12 @@ pub(crate) struct RemoteState {
     pub(crate) asset_selection: usize,
     /// 连接对话框是「添加 SSH 连接」打开的：成功后写进 `~/.ssh/config`。
     pub(crate) adding_host: bool,
+    /// 进程过滤框是否在接收键盘输入。
+    pub(crate) proc_editing: bool,
+    /// 资产搜索关键字。
+    pub(crate) asset_filter: String,
+    /// 资产搜索框是否在接收键盘输入。
+    pub(crate) asset_editing: bool,
     /// SSH 工作区（终端 + 文件 + 服务器概览）；没有会话时为 `None`。
     pub(crate) ws: Option<crate::app::ssh_monitor::Workspace>,
     /// 后台采集概览的回传槽。
@@ -233,6 +239,9 @@ impl Default for RemoteState {
             files: None,
             asset_selection: 0,
             adding_host: false,
+            proc_editing: false,
+            asset_filter: String::new(),
+            asset_editing: false,
             ws: None,
             monitor: Arc::default(),
             ssh_files: Arc::default(),
@@ -799,6 +808,62 @@ fn remove_from_ssh_config(host: &str) -> bool {
     std::fs::write(&path, out).is_ok() && refresh_hosts() > 0
 }
 
+/// 读取远端目录 `dir`（虚拟路径）的条目，解析 `ls -lA` 的输出。
+///
+/// 列序：权限、链接数、属主、属组、大小、日期、时间、名称。
+fn read_remote_dir(dir: &std::path::Path) -> Result<Vec<crate::app::ssh_monitor::FileEntry>, String> {
+    use crate::app::ssh_monitor;
+    let deadline = std::time::Instant::now() + ssh_monitor::monitor_timeout();
+    let exec = Exec::new("ls")
+        .arg("-lA")
+        .arg("--time-style=+%Y-%m-%d %H:%M")
+        .limit(1 << 20);
+    let out = remote::exec(dir, &exec, &|| std::time::Instant::now() >= deadline)
+        .map_err(|e| e.to_string())?;
+    if out.code != Some(0) {
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        return Err(if err.is_empty() {
+            format!("ls 退出码 {:?}", out.code)
+        } else {
+            err
+        });
+    }
+    let mut entries = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 6 {
+            continue;
+        }
+        let perm = cols[0].to_owned();
+        let is_dir = perm.starts_with('d');
+        let owner = format!("{}/{}", cols[2], cols[3]);
+        let size = cols[4].to_owned();
+        // 时间是倒数第 3、2 列，名称是最后一列（可能含空格，取剩余部分）。
+        let time = format!("{} {}", cols[cols.len() - 3], cols[cols.len() - 2]);
+        let name_start = line
+            .match_indices(&format!("{} {}", cols[cols.len() - 3], cols[cols.len() - 2]))
+            .next()
+            .map(|(i, m)| i + m.len())
+            .unwrap_or(0);
+        let name = line[name_start..].trim().to_owned();
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        entries.push(ssh_monitor::FileEntry {
+            name,
+            is_dir,
+            perm,
+            owner,
+            size,
+            time,
+        });
+    }
+    entries.sort_by(|a, b| {
+        (b.is_dir, a.name.to_lowercase()).cmp(&(a.is_dir, b.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
 /// 本机下载目录：用户主目录下的 `Downloads`，没有时回退主目录或临时目录。
 fn download_dir() -> std::path::PathBuf {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -1030,6 +1095,77 @@ impl App {
         self.download(vec![remote], local);
     }
 
+    /// SSH 过滤框（资产搜索 / 进程过滤）的按键：可打印字符追加、退格删除、回车/Esc 结束。
+    ///
+    /// 返回是否已消费该按键；未消费时交回常规按键处理。
+    pub(crate) fn ssh_filter_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use winit::event::ElementState;
+        use winit::keyboard::{Key, NamedKey};
+        // 当前接收输入的是哪一个框。
+        let target = if self.remote.asset_editing {
+            0
+        } else if self.remote.proc_editing {
+            1
+        } else {
+            return false;
+        };
+        match &event.logical_key {
+            Key::Character(text) => {
+                if event.state != ElementState::Pressed {
+                    return true;
+                }
+                self.ssh_filter_push(target, text);
+                true
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if event.state == ElementState::Pressed {
+                    self.ssh_filter_pop(target);
+                }
+                true
+            }
+            Key::Named(NamedKey::Enter | NamedKey::Escape) => {
+                self.remote.asset_editing = false;
+                self.remote.proc_editing = false;
+                self.request_redraw();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 往过滤框 `target`（0 资产、1 进程）追加文字。
+    fn ssh_filter_push(&mut self, target: u8, text: &str) {
+        match target {
+            0 => {
+                self.remote.asset_filter.push_str(text);
+                // 过滤后选中项可能越界，回到第一项。
+                self.remote.asset_selection = 0;
+            }
+            _ => {
+                if let Some(ws) = self.remote.ws.as_mut() {
+                    ws.proc_filter.push_str(text);
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// 从过滤框 `target` 删除最后一个字符。
+    fn ssh_filter_pop(&mut self, target: u8) {
+        match target {
+            0 => {
+                self.remote.asset_filter.pop();
+                self.remote.asset_selection = 0;
+            }
+            _ => {
+                if let Some(ws) = self.remote.ws.as_mut() {
+                    ws.proc_filter.pop();
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
     /// 处理 SSH 工作区中的点击。
     pub(crate) fn press_ssh_ws(&mut self, target: crate::app::ssh_monitor::SshWsTarget) {
         use crate::app::ssh_monitor::SshWsTarget;
@@ -1092,6 +1228,44 @@ impl App {
                     }
                 }
             }
+            SshWsTarget::MkDir => {
+                // 在当前远端目录新建一个文件夹（默认名 new-folder，重名时递增），完成后刷新列表。
+                let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) else {
+                    return;
+                };
+                let target = session.target.clone();
+                let dir = session.cwd.clone();
+                let slot = Arc::clone(&self.remote.ssh_files);
+                self.spawn_blocking_then(UserEvent::SshFilesReady, move || {
+                    let base = winc_backend::virtual_path(&target, dir.as_bytes());
+                    for i in 0..100 {
+                        let name = if i == 0 {
+                            "new-folder".to_owned()
+                        } else {
+                            format!("new-folder-{i}")
+                        };
+                        match winc_backend::fs::create_dir(winc_backend::join(&base, &name)) {
+                            Ok(()) => break,
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                            Err(_) => break,
+                        }
+                    }
+                    // 建完立刻读一次目录，结果交给主线程。
+                    let result = read_remote_dir(&base);
+                    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+                });
+            }
+            SshWsTarget::AssetSearch => {
+                self.remote.asset_editing = true;
+                self.remote.proc_editing = false;
+                self.request_redraw();
+            }
+            SshWsTarget::ProcFilter => {
+                // 聚焦进程过滤框：之后键入的字符进入过滤关键字。
+                self.remote.proc_editing = true;
+                self.remote.asset_editing = false;
+                self.request_redraw();
+            }
             SshWsTarget::Close => self.ssh_close_workspace(),
             SshWsTarget::Session(i) => {
                 let valid = self.remote.ws.as_ref().is_some_and(|ws| i < ws.sessions.len());
@@ -1122,7 +1296,7 @@ impl App {
                     .ws
                     .as_ref()
                     .and_then(|ws| ws.files.get(i))
-                    .map(|f| f.0.clone());
+                    .map(|f| f.name.clone());
                 if let Some(name) = name {
                     self.ssh_download(name);
                 }
@@ -1149,9 +1323,10 @@ impl App {
                     .as_ref()
                     .and_then(|ws| ws.files.get(i))
                     .cloned();
-                let Some((name, is_dir, ..)) = entry else {
+                let Some(entry) = entry else {
                     return;
                 };
+                let (name, is_dir) = (entry.name, entry.is_dir);
                 if is_dir {
                     if let Some(session) = self.remote.ws.as_mut().and_then(|ws| ws.active_mut()) {
                         session.cwd = if session.cwd == "/" {
@@ -1175,7 +1350,6 @@ impl App {
 
     /// 在后台读取当前目录的文件列表。
     pub(crate) fn ssh_read_files(&mut self) {
-        use crate::app::ssh_monitor;
         let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) else {
             return;
         };
@@ -1184,39 +1358,7 @@ impl App {
         let slot = Arc::clone(&self.remote.ssh_files);
         self.spawn_blocking_then(UserEvent::SshFilesReady, move || {
             let dir = winc_backend::virtual_path(&target, dir_name.as_bytes());
-            let deadline = std::time::Instant::now() + ssh_monitor::monitor_timeout();
-            // 用 ls 一次取回名称、权限、大小、时间；-A 不含 . 与 ..。
-            let exec = Exec::new("ls")
-                .arg("-lA")
-                .arg("--time-style=+%Y-%m-%d %H:%M")
-                .limit(1 << 20);
-            let result = remote::exec(&dir, &exec, &|| std::time::Instant::now() >= deadline)
-                .map_err(|e| e.to_string())
-                .and_then(|out| {
-                    if out.code != Some(0) {
-                        let err = String::from_utf8_lossy(&out.stderr).into_owned();
-                        return Err(if err.is_empty() { "ls 失败".to_owned() } else { err });
-                    }
-                    let mut entries = Vec::new();
-                    for line in String::from_utf8_lossy(&out.stdout).lines() {
-                        let cols: Vec<&str> = line.split_whitespace().collect();
-                        // -rw-r--r-- 1 root root 4096 2024-03-23 15:09 name
-                        if cols.len() < 6 {
-                            continue;
-                        }
-                        let perm = cols[0].to_owned();
-                        let is_dir = perm.starts_with('d');
-                        let size = cols[4].to_owned();
-                        // 时间是倒数第 3、2 列，名字是最后一列（可能含空格）。
-                        let time = format!("{} {}", cols[cols.len() - 3], cols[cols.len() - 2]);
-                        let name = cols[cols.len() - 1].to_owned();
-                        entries.push((name, is_dir, size, time, perm));
-                    }
-                    entries.sort_by(|a, b| {
-                        (b.1, a.0.to_lowercase()).cmp(&(a.1, b.0.to_lowercase()))
-                    });
-                    Ok(entries)
-                });
+            let result = read_remote_dir(&dir);
             *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
         });
     }
