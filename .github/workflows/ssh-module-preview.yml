@@ -1,0 +1,255 @@
+name: SSH Module · Preview Build
+
+# SSH 模块界面原型的本地测试构建。
+# 手动触发后为 Windows / Linux / macOS 编译 Winc，打包成安装包，并把原始安装包发布为一个
+# prerelease，方便直接下载到本地测试。
+# 与正式 release 的区别：不做代码签名/公证，不生成签名的更新 feed（appcast），
+# 因此不依赖任何仓库 secrets（发布仅用内置 GITHUB_TOKEN）。
+#
+# 触发：Actions → "SSH Module · Preview Build" → Run workflow
+#   可选填写 tag（默认 ssh-module-preview-<short sha>）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "预览版 tag（留空则用 ssh-module-preview-<short sha>）"
+        type: string
+        default: ""
+      prerelease:
+        description: "发布为 prerelease（true）还是正式 release（false）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # 创建 release 并上传产物
+
+concurrency:
+  group: ssh-module-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---- 解析来源与预览 tag ----
+  prepare:
+    name: Resolve preview source
+    runs-on: ubuntu-24.04
+    outputs:
+      source-sha: ${{ steps.meta.outputs.sha }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          sha="${GITHUB_SHA}"
+          short="${sha:0:7}"
+          tag="${{ inputs.tag }}"
+          if [[ -z "$tag" ]]; then
+            tag="ssh-module-preview-${short}"
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "### SSH 模块预览构建" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source: \`${short}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag: \`${tag}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---- Windows：复用官方打包脚本，跳过签名（脚本在无证书时自动跳过）----
+  windows:
+    name: Windows x64
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      TARGET: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source-sha }}
+      - uses: ./.github/actions/build-setup
+        with:
+          target: ${{ env.TARGET }}
+          source-sha: ${{ needs.prepare.outputs.source-sha }}
+      - name: Configure build
+        run: node release/common/config.mjs --output "$RUNNER_TEMP/build-config.json"
+      - name: Compile
+        run: |
+          cargo build --release --locked --target "$TARGET" -p winc -p winc-pty
+          cargo xtask icons "target/$TARGET/release/bundle/icons"
+      - name: Compile remote server (Linux static)
+        run: cargo xtask server
+      - name: Fetch console host
+        shell: pwsh
+        run: ./release/windows/conpty.ps1 -Destination "target/$env:TARGET/release"
+      - name: Compile WSL file watcher
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p winc-watch
+      - name: Install native packaging tools
+        shell: pwsh
+        run: |
+          choco install nsis --version=3.11 --allow-downgrade --yes --no-progress
+          choco install wixtoolset --version=3.14.1 --allow-downgrade --yes --no-progress
+      - name: Bundle NSIS and MSI installers
+        run: pwsh -NoProfile -File release/windows/package.ps1 -Phase installers -Target "$TARGET"
+      - name: Package portable
+        shell: pwsh
+        run: ./release/windows/package.ps1 -Phase portable -Target $env:TARGET
+      - name: Stage raw installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          B="target/$TARGET/release/bundle"
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          find "$B/nsis" -maxdepth 1 -name '*-setup.exe' -type f -exec cp -t "$RUNNER_TEMP/release-assets" {} +
+          find "$B/msi" -maxdepth 1 -name '*.msi' -type f -exec cp -t "$RUNNER_TEMP/release-assets" {} +
+          find "$B/portable" -maxdepth 1 -name '*-portable.zip' -type f -exec cp -t "$RUNNER_TEMP/release-assets" {} +
+          printf 'Windows assets:\n' >> "$GITHUB_STEP_SUMMARY"
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '  %f\n' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: preview-windows-x64
+          path: ${{ runner.temp }}/release-assets
+          if-no-files-found: error
+
+  # ---- Linux：完全对齐官方 release-linux.yml（去掉签名与验证）----
+  linux:
+    name: Linux x64
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source-sha }}
+      - uses: ./.github/actions/build-setup
+        with:
+          target: ${{ env.TARGET }}
+          source-sha: ${{ needs.prepare.outputs.source-sha }}
+      - name: Configure build
+        run: node release/common/config.mjs --output "$RUNNER_TEMP/build-config.json"
+      - name: Compile
+        run: |
+          cargo build --release --locked --target "$TARGET" -p winc -p winc-pty
+          cargo xtask icons "target/$TARGET/release/bundle/icons"
+      - name: Compile remote server
+        run: cargo xtask server
+      - name: Bundle and verify Arch package
+        run: bash release/linux/arch/package.sh "$TARGET"
+      - name: Bundle and verify RPM package
+        run: bash release/linux/rpm/package.sh "$TARGET"
+      - name: Prepare native packaging tools
+        run: node release/linux/download-tools.mjs
+      - name: Bundle deb and AppImage
+        env:
+          LINUXDEPLOY_DEBUG_LOG: ${{ runner.temp }}/linuxdeploy.log
+        run: bash release/linux/package.sh "$TARGET"
+      - name: Stage raw packages
+        run: |
+          set -euo pipefail
+          B="target/$TARGET/release/bundle"
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          find "$B/appimage" "$B/deb" "$B/rpm" "$B/arch" -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+            -exec cp -t "$RUNNER_TEMP/release-assets" {} +
+          printf 'Linux assets:\n' >> "$GITHUB_STEP_SUMMARY"
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '  %f\n' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: preview-linux-x64
+          path: ${{ runner.temp }}/release-assets
+          if-no-files-found: error
+
+  # ---- macOS（arm64 与 x64），ad-hoc 签名，无公证 ----
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: prepare
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x64
+            target: x86_64-apple-darwin
+    env:
+      TARGET: ${{ matrix.target }}
+      ARCH: ${{ matrix.arch }}
+      SIGNING_MODE: adhoc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source-sha }}
+      - uses: ./.github/actions/build-setup
+        with:
+          target: ${{ matrix.target }}
+          source-sha: ${{ needs.prepare.outputs.source-sha }}
+      - name: Configure build
+        run: node release/common/config.mjs --output "$RUNNER_TEMP/build-config.json"
+      - name: Compile
+        run: |
+          cargo build --release --locked --target "$TARGET" -p winc -p winc-pty
+          cargo xtask icons "target/$TARGET/release/bundle/icons"
+      - name: Compile remote server
+        run: cargo xtask server
+      - name: Bundle app (ad-hoc)
+        run: bash release/macos/package.sh app "$TARGET"
+      - name: Create DMG (ad-hoc)
+        run: bash release/macos/package.sh dmg "$TARGET"
+      - name: Stage raw DMG
+        run: |
+          set -euo pipefail
+          B="target/$TARGET/release/bundle"
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          find "$B/dmg" -maxdepth 1 -name '*.dmg' -type f -exec cp -t "$RUNNER_TEMP/release-assets" {} +
+          printf 'macOS %s assets:\n' "$ARCH" >> "$GITHUB_STEP_SUMMARY"
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '  %f\n' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: preview-macos-${{ matrix.arch }}
+          path: ${{ runner.temp }}/release-assets
+          if-no-files-found: error
+
+  # ---- 汇总并发布 prerelease ----
+  publish:
+    name: Publish preview release
+    needs: [prepare, windows, linux, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: preview-*
+          path: preview-assets
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd preview-assets
+          sha256sum * > SHA256SUMS.txt
+      - name: Create / update preview release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SHA: ${{ needs.prepare.outputs.source-sha }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          flags=""
+          if [[ "$PRERELEASE" == "true" ]]; then flags="--prerelease"; fi
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --target "$SHA" --title "SSH 模块预览 · $TAG" \
+              --notes "SSH 资产管理模块本地测试预览构建。来源 commit: $SHA。安装包未签名/未公证，仅供本地测试。" $flags
+          gh release upload "$TAG" preview-assets/* --clobber
+          echo "预览版已发布：https://github.com/$GH_REPO/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
