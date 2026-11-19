@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Winc · SSH 资产管理模块（界面原型）</title>
+<style>
+/* ============ Winc「墨蓝」主题变量 ============ */
+:root{
+  --frame:#101114;      /* 窗口边框/最底 */
+  --card:#181A1E;       /* 卡片/面板 */
+  --popup:#212328;      /* 弹出层/悬浮 */
+  --text:#DFE1E5;
+  --muted:#8C9098;
+  --dim:#5F636B;
+  --accent:#548AF7;
+  --accent-fill:#3574F0;
+  --selection:#214283;
+  --green:#5FB865;
+  --yellow:#D6AE58;
+  --red:#F75464;
+  --cyan:#2AACB8;
+  --purple:#C77DBB;
+  --line:#26282E;
+  --line-2:#2E3138;
+  --radius:8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "SF Mono", Consolas, monospace;
+  --mono: "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+}
+/* 浅色主题 */
+:root[data-theme="light"]{
+  --frame:#EBECF0; --card:#FFFFFF; --popup:#FFFFFF;
+  --text:#1E1F22; --muted:#6C707E; --dim:#A8ADBD;
+  --accent:#3574F0; --accent-fill:#3574F0; --selection:#A6D2FF;
+  --line:#E4E6EC; --line-2:#DADDE5;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--frame);color:var(--text);font-family:var(--font);
+  font-size:13px;line-height:1.5;overflow:hidden;-webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:none}
+input{font-family:inherit}
+.app{height:100vh;display:flex;flex-direction:column}
+
+/* ============ 标题栏 ============ */
+.titlebar{
+  height:38px;flex:0 0 38px;background:var(--frame);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;padding:0 12px;gap:12px;user-select:none;
+}
+.tb-dots{display:flex;gap:8px}
+.tb-dot{width:12px;height:12px;border-radius:50%}
+.tb-dot.r{background:#F75464}.tb-dot.y{background:#D6AE58}.tb-dot.g{background:#5FB865}
+.tb-title{font-size:12px;color:var(--muted);margin-left:4px}
+.tb-title b{color:var(--text);font-weight:600}
+.tb-spacer{flex:1}
+.tb-actions{display:flex;gap:6px}
+.tb-btn{padding:5px 10px;border-radius:6px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px}
+.tb-btn:hover{background:var(--popup);color:var(--text)}
+.tb-btn.primary{background:var(--accent-fill);color:#fff}
+.tb-btn.primary:hover{filter:brightness(1.1)}
+
+/* ============ 主标签栏 ============ */
+.main-tabs{
+  height:40px;flex:0 0 40px;background:var(--card);border-bottom:1px solid var(--line);
+  display:flex;align-items:stretch;padding:0 8px;gap:2px;user-select:none;
+}
+.mtab{
+  display:flex;align-items:center;gap:8px;padding:0 16px;color:var(--muted);font-size:12px;
+  border-bottom:2px solid transparent;position:relative;
+}
+.mtab:hover{color:var(--text)}
+.mtab.active{color:var(--text);border-bottom-color:var(--accent)}
+.mtab .ic{opacity:.85}
+.mtab .close{font-size:14px;color:var(--dim);margin-left:6px}
+.mtab .close:hover{color:var(--text)}
+.mtabs-fill{flex:1}
+
+/* ============ 主体三栏 ============ */
+.body{display:flex;flex:1;min-height:0}
+
+/* 左侧资产树 */
+.assets{
+  width:248px;flex:0 0 248px;background:var(--card);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0;
+}
+.panel-head{
+  height:40px;flex:0 0 40px;display:flex;align-items:center;padding:0 12px;gap:8px;
+  border-bottom:1px solid var(--line);
+}
+.panel-head .ttl{font-size:12px;font-weight:600;letter-spacing:.3px}
+.panel-head .badge{font-size:10px;color:var(--muted);background:var(--popup);padding:1px 6px;border-radius:8px}
+.search-box{margin:10px 10px 6px;position:relative}
+.search-box input{
+  width:100%;height:30px;background:var(--frame);border:1px solid var(--line-2);border-radius:6px;
+  color:var(--text);padding:0 10px 0 30px;font-size:12px;outline:none;
+}
+.search-box input:focus{border-color:var(--accent)}
+.search-box .si{position:absolute;left:9px;top:7px;color:var(--dim)}
+.tree{flex:1;overflow-y:auto;padding:4px 6px 12px}
+.tree::-webkit-scrollbar,.scroll::-webkit-scrollbar{width:8px;height:8px}
+.tree::-webkit-scrollbar-thumb,.scroll::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
+.grp{display:flex;align-items:center;gap:6px;padding:7px 8px 4px;color:var(--dim);font-size:11px;font-weight:600}
+.grp .caret{font-size:9px;transition:transform .15s}
+.grp.collapsed .caret{transform:rotate(-90deg)}
+.host{
+  display:flex;align-items:center;gap:9px;height:36px;padding:0 8px;border-radius:6px;cursor:pointer;
+  position:relative;
+}
+.host:hover{background:var(--popup)}
+.host.active{background:var(--selection)}
+.host .status{width:7px;height:7px;border-radius:50%;flex:0 0 7px}
+.st-on{background:var(--green);box-shadow:0 0 0 3px rgba(95,184,101,.15)}
+.st-off{background:var(--dim)}
+.st-busy{background:var(--yellow);box-shadow:0 0 0 3px rgba(214,174,88,.15)}
+.host .meta{flex:1;min-width:0}
+.host .name{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.host .desc{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.host .os{font-size:13px;opacity:.8}
+.assets-foot{height:44px;flex:0 0 44px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 10px;gap:6px}
+.mini-btn{height:26px;padding:0 10px;border:1px solid var(--line-2);border-radius:6px;color:var(--muted);font-size:11px;display:flex;align-items:center;gap:5px}
+.mini-btn:hover{background:var(--popup);color:var(--text)}
+
+/* 中间工作区 */
+.work{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--frame)}
+.session-tabs{
+  height:36px;flex:0 0 36px;background:var(--card);border-bottom:1px solid var(--line);
+  display:flex;align-items:stretch;padding:0 8px;gap:2px;user-select:none;
+}
+.stab{display:flex;align-items:center;gap:7px;padding:0 12px;color:var(--muted);font-size:11px;border-bottom:2px solid transparent;cursor:pointer}
+.stab:hover{color:var(--text)}
+.stab.active{color:var(--text);border-bottom-color:var(--green)}
+.stab .dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.stab .close{color:var(--dim);font-size:13px;margin-left:4px}
+.work-area{flex:1;min-height:0;display:flex}
+.terminal{
+  flex:1 1 46%;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--line);
+}
+.files{flex:1 1 54%;min-width:0;display:flex;flex-direction:column}
+.subhead{height:34px;flex:0 0 34px;display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid var(--line);background:var(--card)}
+.subhead .ttl{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.3px}
+.subhead .spacer{flex:1}
+.tool-ic{width:24px;height:24px;display:grid;place-items:center;border-radius:5px;color:var(--muted)}
+.tool-ic:hover{background:var(--popup);color:var(--text)}
+
+.term-body{
+  flex:1;overflow-y:auto;padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.65;
+  background:var(--frame);color:var(--text);
+}
+.t-line{white-space:pre-wrap;word-break:break-all}
+.t-prompt{color:var(--green)}
+.t-path{color:var(--cyan)}
+.t-cmd{color:var(--text)}
+.t-out{color:var(--muted)}
+.t-ok{color:var(--green)}
+.t-warn{color:var(--yellow)}
+.term-input-row{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px}
+.term-input-row .p{color:var(--green);white-space:nowrap}
+.term-input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:12px;caret-color:var(--accent)}
+
+/* 文件管理器 */
+.crumb{height:32px;flex:0 0 32px;display:flex;align-items:center;padding:0 12px;gap:4px;border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;font-family:var(--mono)}
+.crumb a{color:var(--accent);cursor:pointer}
+.crumb a:hover{text-decoration:underline}
+.file-toolbar{height:34px;flex:0 0 34px;display:flex;align-items:center;padding:0 10px;gap:4px;border-bottom:1px solid var(--line);background:var(--card)}
+.fbtn{height:24px;padding:0 9px;border-radius:5px;color:var(--muted);font-size:11px;display:flex;align-items:center;gap:5px}
+.fbtn:hover{background:var(--popup);color:var(--text)}
+.fbtn.up{color:var(--accent)}
+.file-table-wrap{flex:1;overflow:auto}
+table.ft{width:100%;border-collapse:collapse;font-size:11.5px}
+table.ft th{
+  position:sticky;top:0;background:var(--card);color:var(--muted);font-weight:500;text-align:left;
+  padding:7px 12px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:2;
+}
+table.ft td{padding:6px 12px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--muted)}
+table.ft tr:hover td{background:var(--popup)}
+table.ft td.nm{color:var(--text)}
+table.ft .fname{display:flex;align-items:center;gap:8px}
+.fic{width:15px;text-align:center;font-size:12px}
+.perm{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.owner{font-family:var(--mono);font-size:10.5px}
+.file-foot{height:26px;flex:0 0 26px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 12px;color:var(--dim);font-size:10.5px}
+
+/* 右侧服务器概览 */
+.overview{
+  width:336px;flex:0 0 336px;background:var(--card);border-left:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0;
+}
+.ov-scroll{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--frame);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.card-h{height:34px;display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none}
+.card-h .ct{font-size:11px;font-weight:600;letter-spacing:.3px}
+.card-h .chev{margin-left:auto;color:var(--dim);font-size:10px;transition:transform .15s}
+.card.collapsed .chev{transform:rotate(-90deg)}
+.card.collapsed .card-b{display:none}
+.card-b{padding:12px}
+.kv{display:grid;grid-template-columns:76px 1fr;gap:6px 8px;font-size:11.5px}
+.kv .k{color:var(--muted)}
+.kv .v{color:var(--text);font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v .ok{color:var(--green)} .v .warn{color:var(--yellow)}
+
+.metric-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.metric-row .lbl{color:var(--muted);font-size:11px}
+.metric-row .val{font-family:var(--mono);font-size:12px;font-weight:600}
+.bar{height:6px;background:var(--line-2);border-radius:3px;overflow:hidden}
+.bar > i{display:block;height:100%;border-radius:3px;transition:width .5s ease}
+.fill-green{background:var(--green)}.fill-blue{background:var(--accent)}.fill-yellow{background:var(--yellow)}.fill-red{background:var(--red)}.fill-cyan{background:var(--cyan)}
+.cores{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:10px}
+.core .cl{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:3px}
+.core .cl b{font-family:var(--mono);color:var(--muted);font-weight:500}
+
+.spark{width:100%;height:56px;display:block;margin-top:4px}
+.net2{display:flex;gap:16px;margin-top:8px;font-size:10.5px}
+.net2 span{color:var(--muted)}
+.net2 b{font-family:var(--mono);font-weight:600}
+.up{color:var(--green)}.down{color:var(--accent)}
+
+.mount{margin-bottom:12px}
+.mount:last-child{margin-bottom:0}
+.mount .mt{display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px}
+.mount .mp{color:var(--muted);font-family:var(--mono);font-size:10px}
+.mount .mu{font-family:var(--mono);color:var(--muted)}
+
+.proc-tools{display:flex;gap:6px;margin-bottom:8px}
+.proc-tools input{flex:1;height:26px;background:var(--frame);border:1px solid var(--line-2);border-radius:5px;color:var(--text);padding:0 8px;font-size:11px;outline:none}
+.proc-tools input:focus{border-color:var(--accent)}
+table.pt{width:100%;border-collapse:collapse;font-size:10.5px}
+table.pt th{text-align:left;color:var(--muted);font-weight:500;padding:4px 6px;border-bottom:1px solid var(--line)}
+table.pt td{padding:4px 6px;border-bottom:1px solid var(--line);font-family:var(--mono);color:var(--muted)}
+table.pt td.pname{font-family:var(--font);color:var(--text)}
+.kill{color:var(--red);font-size:10px;opacity:.65}
+.kill:hover{opacity:1}
+.ifaces{font-size:11px}
+.iface{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line)}
+.iface:last-child{border:none}
+.iface .in{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+
+/* 底部状态栏 */
+.statusbar{height:26px;flex:0 0 26px;background:var(--card);border-top:1px solid var(--line);display:flex;align-items:center;padding:0 12px;gap:16px;color:var(--muted);font-size:10.5px}
+.statusbar .r{margin-left:auto;display:flex;gap:16px}
+.statusbar b{color:var(--text);font-weight:500}
+.sb-ok{color:var(--green)}
+
+/* Toast */
+#toast{position:fixed;bottom:40px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--popup);border:1px solid var(--line-2);padding:9px 16px;border-radius:8px;font-size:12px;opacity:0;pointer-events:none;transition:.25s;z-index:99;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.hint{position:fixed;bottom:34px;right:12px;color:var(--dim);font-size:10px;z-index:5}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <div class="tb-dots"><span class="tb-dot r"></span><span class="tb-dot y"></span><span class="tb-dot g"></span></div>
+    <div class="tb-title"><b>Winc</b> — SSH 远程管理 <span style="color:var(--dim)">· 界面原型</span></div>
+    <div class="tb-spacer"></div>
+    <div class="tb-actions">
+      <button class="tb-btn" id="themeBtn" title="切换明暗主题">◐ 主题</button>
+      <button class="tb-btn" onclick="toast('已打开 SSH 配置：~/.ssh/config')">⚙ SSH 配置</button>
+      <button class="tb-btn primary" onclick="toast('新建资产对话框（原型）')">＋ 新建资产</button>
+    </div>
+  </div>
+
+  <!-- 主标签 -->
+  <div class="main-tabs">
+    <div class="mtab"><span class="ic">⌂</span> 开始页</div>
+    <div class="mtab"><span class="ic">✎</span> main.rs</div>
+    <div class="mtab active"><span class="ic">⬡</span> SSH 远程 <span class="close">✕</span></div>
+    <div class="mtabs-fill"></div>
+  </div>
+
+  <!-- 主体 -->
+  <div class="body">
+    <!-- 左：资产树 -->
+    <aside class="assets">
+      <div class="panel-head"><span class="ttl">SSH 资产</span><span class="badge" id="hostCount">6</span></div>
+      <div class="search-box"><span class="si">⌕</span><input id="assetSearch" placeholder="搜索主机 / 分组…" /></div>
+      <div class="tree" id="tree"></div>
+      <div class="assets-foot">
+        <button class="mini-btn" onclick="toast('导入配置（原型）')">⇩ 导入</button>
+        <button class="mini-btn" onclick="toast('导出配置（原型）')">⇧ 导出</button>
+        <button class="mini-btn" onclick="toast('批量命令（原型）')" style="margin-left:auto">▣ 批量</button>
+      </div>
+    </aside>
+
+    <!-- 中：会话区 -->
+    <section class="work">
+      <div class="session-tabs" id="sessionTabs"></div>
+      <div class="work-area">
+        <!-- 终端 -->
+        <div class="terminal">
+          <div class="subhead"><span class="ttl">终端</span><span class="spacer"></span>
+            <button class="tool-ic" title="广播到全部会话" onclick="toast('已开启命令广播')">◈</button>
+            <button class="tool-ic" title="清屏" onclick="clearTerm()">⌫</button>
+            <button class="tool-ic" title="新建终端" onclick="toast('新建终端标签（原型）')">＋</button>
+          </div>
+          <div class="term-body scroll" id="termBody"></div>
+          <div class="term-input-row" style="padding:0 14px 10px">
+            <span class="p" id="termPrompt">root@prod-web-01:~#</span>
+            <input class="term-input" id="termInput" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+        <!-- 文件管理 -->
+        <div class="files">
+          <div class="subhead"><span class="ttl">远程文件</span><span class="spacer"></span>
+            <button class="tool-ic" title="传输队列" onclick="toast('传输队列：0 个任务')">⇅</button>
+          </div>
+          <div class="crumb" id="crumb"></div>
+          <div class="file-toolbar">
+            <button class="fbtn up" onclick="toast('返回上级目录')">↑ 上级</button>
+            <button class="fbtn" onclick="toast('选择本地文件上传（原型）')">⇧ 上传</button>
+            <button class="fbtn" onclick="toast('下载所选文件（原型）')">⇩ 下载</button>
+            <button class="fbtn" onclick="toast('新建文件夹（原型）')">＋ 新建</button>
+            <button class="fbtn" onclick="refreshFiles()" title="刷新">⟳</button>
+          </div>
+          <div class="file-table-wrap scroll">
+            <table class="ft">
+              <thead><tr><th style="width:34%">名称</th><th>修改时间</th><th>类型</th><th>大小</th><th>权限</th><th>用户/组</th></tr></thead>
+              <tbody id="fileBody"></tbody>
+            </table>
+          </div>
+          <div class="file-foot" id="fileFoot"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右：服务器概览 -->
+    <aside class="overview">
+      <div class="panel-head">
+        <span class="ttl">服务器概览</span>
+        <span class="badge" style="background:rgba(95,184,101,.15);color:var(--green)" id="ovStatus">● 在线</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="tool-ic" title="立即刷新" onclick="refreshAll()">⟳</button>
+      </div>
+      <div class="ov-scroll" id="ovScroll">
+
+        <!-- 系统信息 -->
+        <div class="card" data-sec>
+          <div class="card-h" onclick="toggleCard(this)"><span class="ct">系统信息</span><span class="chev">▾</span></div>
+          <div class="card-b"><div class="kv" id="sysInfo"></div></div>
+        </div>
+
+        <!-- CPU -->
+        <div class="card" data-sec>
+          <div class="card-h" onclick="toggleCard(this)"><span class="ct">CPU</span><span class="chev">▾</span></div>
+          <div class="card-b">
+            <div class="metric-row"><span class="lbl">总占用</span><span class="val" id="cpuTotal">12.4%</span></div>
+            <div class="bar"><i class="fill-blue" id="cpuBar" style="width:12.4%"></i></div>
+            <div class="cores" id="cores"></div>
+            <div class="metric-row" style="margin-top:12px"><span class="lbl">负载 (1/5/15m)</span><span class="val" id="loadAvg" style="font-size:11px">0.42 / 0.58 / 0.61</span></div>
+          </div>
+        </div>
+
+        <!-- 内存 -->
+        <div class="card" data-sec>
+          <div class="card-h" onclick="toggleCard(this)"><span class="ct">内存 / 交换</span><span class="chev">▾</span></div>
+          <div class="card-b">
+            <div class="metric-row"><span class="lbl">物理内存</span><span class="val" id="memTotal">935 MB / 3.6 GB</span></div>
+            <div class="bar"><i class="fill-green" id="memBar" style="width:26%"></i></div>
+            <div class="metric-row" style="margin-top:10px"><span class="lbl">Swap</span><span class="val" id="swapTotal" style="font-size:11px">0 MB / 1.0 GB</span></div>
+            <div class="bar"><i class="fill-cyan" id="swapBar" style="width:0%"></i></div>
+          </div>
+        </div>
+
+        <!-- 网络 -->
+        <div class="card" data-sec>
+          <div class="card-h" onclick="toggleCard(this)"><span class="ct">网络流量</span><span class="chev">▾</span></div>
+          <div class="card-b">
+            <svg class="spark" id="netSpark" viewBox="0 0 300 56" preserveAspectRatio="none"></svg>
+            <div class="net2"><span class="down">▼ 下载 <b id="netDown">1.24 MB/s</b></span><span class="up">▲ 上传 <b id="netUp">312 KB/s</b></span></div>
+            <div class="ifaces" id="ifaces" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <!-- 磁盘挂载 -->
+        <div class="card" data-sec>
+          <div class="card-h" onclick="toggleCard(this)"><span class="ct">磁盘挂载</span><span class="chev">▾</span></div>
+          <div class="card-b" id="mounts"></div>
+        </div>
+
+        <!-- 进程 -->
+        <div class="card" data-sec>
+          <div class="card-h" onclick="toggleCard(this)"><span class="ct">进程管理</span><span class="chev">▾</span></div>
+          <div class="card-b">
+            <div class="proc-tools"><input id="procSearch" placeholder="过滤进程名 / PID…" /><button class="fbtn" onclick="toast('按 CPU 排序')">⇩ CPU</button></div>
+            <table class="pt">
+              <thead><tr><th>PID</th><th>进程</th><th>CPU%</th><th>内存</th><th></th></tr></thead>
+              <tbody id="procBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="statusbar">
+    <span>会话 <b>prod-web-01</b></span>
+    <span class="sb-ok">● SSH 已连接</span>
+    <span>协议 <b>SSH2 / SFTP</b></span>
+    <span class="r"><span>延迟 <b id="latency">18 ms</b></span><span>上传 <b>0 B/s</b></span><span>下载 <b>0 B/s</b></span><span>Winc SSH 模块 · 原型</span></span>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div class="hint">原型演示：可点击主机/标签切换、卡片折叠、终端输入、进程过滤等</div>
+
+<script>
+/* ============ 模拟数据 ============ */
+const HOSTS = [
+  {group:'生产环境', name:'prod-web-01', user:'root', host:'10.0.12.31', port:22, os:'🐧', status:'on',
+   sys:{user:'root', uptime:'42 天 22:19', host:'prod-web-01', os:'Ubuntu 22.04.4 LTS', kernel:'5.15.0-105-generic', arch:'x86_64', cpuModel:'Intel Xeon Platinum 8 vCPU'},
+   cpu:12.4, cores:[8,24,5,41,12,7,33,9], mem:[935,3686], loads:[.42,.58,.61],
+   mounts:[['/','ext4',86, '38G / 44G'],['/boot','ext4',42,'195M / 465M'],['/data','xfs',71,'712G / 1.0T']],
+   procs:[['1420','nginx',2.1,'24.6M'],['883','mysqld',8.7,'512.4M'],['2311','node',1.3,'88.2M'],['1','systemd',0.0,'11.2M'],['664','sshd',0.1,'6.8M']],
+   files:null},
+  {group:'生产环境', name:'prod-db-02', user:'deploy', host:'10.0.12.42', port:22, os:'🐧', status:'on',
+   sys:{user:'deploy', uptime:'118 天 03:47', host:'prod-db-02', os:'Debian 12 (bookworm)', kernel:'6.1.0-18-amd64', arch:'x86_64', cpuModel:'AMD EPYC 16 vCPU'},
+   cpu:38.6, cores:[55,42,61,38,22,49,31,44], mem:[5120,16384], loads:[2.11,1.98,1.76],
+   mounts:[['/','ext4',54,'220G / 410G'],['/var/lib/mysql','xfs',78,'1.6T / 2.0T']],
+   procs:[['991','mysqld',42.3,'4.2G'],['12','kworker',1.1,'0B'],['778','redis-server',3.4,'128M'],['1','systemd',0.0,'12M']],
+   files:null},
+  {group:'生产环境', name:'prod-cache-03', user:'root', host:'10.0.12.55', port:2222, os:'🐧', status:'busy'},
+  {group:'测试环境', name:'test-k8s-node1', user:'ubuntu', host:'192.168.30.11', port:22, os:'🐧', status:'on'},
+  {group:'测试环境', name:'test-win-dev', user:'administrator', host:'192.168.30.88', port:22, os:'🪟', status:'off'},
+  {group:'个人', name:'raspberry-pi', user:'pi', host:'192.168.1.50', port:22, os:'🐧', status:'off'},
+];
+const DEFAULT_FILES = [
+  ['.config','2024-03-23 15:09','文件夹','4 KB','drwxr-xr-x','root/root','dir'],
+  ['.ssh','2024-03-23 15:05','文件夹','4 KB','drwx------','root/root','dir'],
+  ['.viminfo','2024-04-05 23:03','viminfo','4.1 KB','-rw-------','root/root','file'],
+  ['app.log','2024-04-13 19:11','日志','128.4 KB','-rw-r--r--','root/root','file'],
+  ['deploy.sh','2024-04-12 10:32','Shell 脚本','2.3 KB','-rwxr-xr-x','root/root','file'],
+  ['docker-compose.yml','2024-04-10 08:15','YAML','1.8 KB','-rw-r--r--','root/root','file'],
+  ['nginx.conf','2024-04-01 16:44','配置文件','3.6 KB','-rw-r--r--','root/root','file'],
+  ['README.md','2024-03-30 11:20','Markdown','956 B','-rw-r--r--','root/root','file'],
+];
+const IFACES = [
+  ['eth0','10.0.12.31/24  ·  UP  ·  1 Gbps'],
+  ['lo','127.0.0.1/8  ·  UP  ·  环回'],
+  ['docker0','172.17.0.1/16  ·  UP'],
+];
+
+let current = HOSTS[0];
+let sessions = [HOSTS[0], HOSTS[1]];
+
+/* ============ 渲染资产树 ============ */
+function renderTree(filter=''){
+  const tree = document.getElementById('tree');
+  const f = filter.toLowerCase();
+  const groups = {};
+  HOSTS.forEach(h=>{ if(!f || h.name.includes(f)||h.host.includes(f)||h.group.includes(f)) (groups[h.group] ||= []).push(h); });
+  let html='';
+  for(const [g,list] of Object.entries(groups)){
+    html += `<div class="grp"><span class="caret">▾</span>${g}</div>`;
+    list.forEach(h=>{
+      const st = h.status==='on'?'st-on':h.status==='busy'?'st-busy':'st-off';
+      const active = h.name===current.name?' active':'';
+      html += `<div class="host${active}" onclick="selectHost('${h.name}')">
+        <span class="status ${st}"></span>
+        <div class="meta"><div class="name">${h.name}</div><div class="desc">${h.user}@${h.host}:${h.port}</div></div>
+        <span class="os">${h.os}</span></div>`;
+    });
+  }
+  tree.innerHTML = html || '<div style="padding:16px;color:var(--dim);font-size:11px">没有匹配的资产</div>';
+}
+
+/* ============ 渲染会话标签 ============ */
+function renderSessions(){
+  document.getElementById('sessionTabs').innerHTML = sessions.map((s,i)=>{
+    const dot = s.status==='on'?'var(--green)':s.status==='busy'?'var(--yellow)':'var(--dim)';
+    return `<div class="stab ${s.name===current.name?'active':''}" onclick="selectHost('${s.name}')">
+      <span class="dot" style="background:${dot}"></span> ${s.user}@${s.name} <span class="close" onclick="event.stopPropagation();closeSession(${i})">✕</span></div>`;
+  }).join('') + `<div class="stab" onclick="toast('新建会话（原型）')" style="color:var(--dim)">＋</div>`;
+}
+
+/* ============ 填充概览数据 ============ */
+function fillOverview(h){
+  const sys = h.sys || {
+    user:h.user, uptime:'3 天 05:12', host:h.name, os:h.os==='🪟'?'Windows Server 2022':'Ubuntu 22.04 LTS',
+    kernel:h.os==='🪟'?'NT 10.0':'5.15.0-generic', arch:'x86_64', cpuModel:'8 vCPU'
+  };
+  const items = [['用户名',sys.user],['运行时间',sys.uptime],['Host',sys.host],['系统',sys.os],['内核',sys.kernel],['架构',sys.arch],['CPU',sys.cpuModel]];
+  document.getElementById('sysInfo').innerHTML = items.map(([k,v])=>`<div class="k">${k}</div><div class="v" title="${v}">${v}</div>`).join('');
+
+  const cpu = h.cpu ?? 18.6;
+  document.getElementById('cpuTotal').textContent = cpu.toFixed(1)+'%';
+  setBar('cpuBar', cpu, cpu>70?'fill-red':cpu>40?'fill-yellow':'fill-blue');
+  const cores = h.cores || Array.from({length:8},()=>Math.round(Math.random()*45));
+  document.getElementById('cores').innerHTML = cores.map((c,i)=>`<div class="core"><div class="cl"><span>CPU ${i}</span><b>${c}%</b></div><div class="bar"><i class="${c>70?'fill-red':c>40?'fill-yellow':'fill-green'}" style="width:${c}%"></i></div></div>`).join('');
+  const loads = h.loads || [.3,.4,.5];
+  document.getElementById('loadAvg').textContent = loads.map(x=>x.toFixed(2)).join(' / ');
+
+  const mem = h.mem || [1240,8192];
+  document.getElementById('memTotal').textContent = `${mem[0]} MB / ${(mem[1]/1024).toFixed(1)} GB`;
+  setBar('memBar', mem[0]/mem[1]*100, 'fill-green');
+
+  document.getElementById('ifaces').innerHTML = IFACES.map(([n,d])=>`<div class="iface"><span class="in" style="color:var(--text)">${n}</span><span class="in">${d}</span></div>`).join('');
+  const mounts = h.mounts || [['/','ext4',56,'48G / 86G'],['/home','ext4',33,'32G / 96G']];
+  document.getElementById('mounts').innerHTML = mounts.map(([p,fs,pct,use])=>`<div class="mount">
+    <div class="mt"><span class="mp">${p} <span style="color:var(--dim)">· ${fs}</span></span><span class="mu">${use} · ${pct}%</span></div>
+    <div class="bar"><i class="${pct>85?'fill-red':pct>65?'fill-yellow':'fill-blue'}" style="width:${pct}%"></i></div></div>`).join('');
+  renderProcs(h.procs);
+  drawNetSpark();
+  document.getElementById('ovStatus').textContent = h.status==='off'?'○ 离线':h.status==='busy'?'◐ 繁忙':'● 在线';
+  document.getElementById('ovStatus').style.color = h.status==='off'?'var(--dim)':h.status==='busy'?'var(--yellow)':'var(--green)';
+}
+function setBar(id,pct,cls){const b=document.getElementById(id);b.style.width=pct+'%';b.className=b.className.replace(/fill-\w+/g,'').trim()+' '+cls;}
+
+/* ============ 进程表 ============ */
+let procData=[];
+function renderProcs(data){
+  procData = data || [];
+  const f = document.getElementById('procSearch').value.toLowerCase();
+  const list = procData.filter(p=>!f||p[0].includes(f)||p[1].toLowerCase().includes(f));
+  document.getElementById('procBody').innerHTML = list.map((p,i)=>`<tr>
+    <td>${p[0]}</td><td class="pname">${p[1]}</td><td>${p[2]}%</td><td>${p[3]}</td>
+    <td><span class="kill" onclick="killProc('${p[0]}')" title="结束进程">✕ kill</span></td></tr>`).join('')
+    || '<tr><td colspan="5" style="text-align:center;color:var(--dim)">无匹配进程</td></tr>';
+}
+function killProc(pid){procData=procData.filter(p=>p[0]!==pid);renderProcs();toast('已结束进程 PID '+pid+'（原型）');}
+
+/* ============ 文件表 ============ */
+function fillFiles(h){
+  const files = DEFAULT_FILES;
+  document.getElementById('crumb').innerHTML = `<a onclick="toast('根目录')">~</a> / <a>root</a> / <span style="color:var(--text)">home</span>`;
+  const icons={'dir':'📁','file':'📄'};
+  document.getElementById('fileBody').innerHTML = files.map(f=>`<tr ondblclick="toast('打开 ${f[0]}（原型）')">
+    <td class="nm"><div class="fname"><span class="fic">${icons[f[6]]}</span>${f[0]}</div></td>
+    <td>${f[1]}</td><td>${f[2]}</td><td>${f[3]}</td><td class="perm">${f[4]}</td><td class="owner">${f[5]}</td></tr>`).join('');
+  document.getElementById('fileFoot').textContent = `共 ${files.filter(f=>f[6]==='file').length} 个文件、${files.filter(f=>f[6]==='dir').length} 个文件夹  ·  大小总计 145.3 KB  ·  SFTP`;
+}
+
+/* ============ 终端 ============ */
+function termLine(html){const el=document.getElementById('termBody');el.insertAdjacentHTML('beforeend',`<div class="t-line">${html}</div>`);el.scrollTop=el.scrollHeight;}
+function initTerm(h){
+  document.getElementById('termBody').innerHTML='';
+  termLine(`<span class="t-ok">Connecting to ${h.host}...</span>`);
+  termLine(`<span class="t-out">Authenticated with publickey "id_ed25519".</span>`);
+  termLine(`<span class="t-ok">Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0 x86_64)</span>`);
+  termLine(`<span class="t-out">Last login: Tue Apr 15 09:31:04 2024 from 10.0.8.17</span>`);
+  termLine('');
+  termLine(`<span class="t-prompt">${h.user}@${h.name}:~#</span> <span class="t-cmd">uptime</span>`);
+  termLine(`<span class="t-out"> 09:42:17 up 42 days, 22:19,  3 users,  load average: 0.42, 0.58, 0.61</span>`);
+  termLine('');
+  updatePrompt(h);
+}
+function updatePrompt(h){document.getElementById('termPrompt').textContent=`${h.user}@${h.name}:~#`;}
+function clearTerm(){document.getElementById('termBody').innerHTML='';}
+document.getElementById('termInput').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  const v=e.target.value.trim();if(!v)return;
+  termLine(`<span class="t-prompt">${current.user}@${current.name}:~#</span> <span class="t-cmd">${v}</span>`);
+  if(v==='clear'){clearTerm();}
+  else if(v.startsWith('cd ')){termLine(`<span class="t-out">（已切换到 ${v.slice(3)}）</span>`);}
+  else if(v==='ls'||v==='ll'){termLine(`<span class="t-out">app.log  deploy.sh  docker-compose.yml  nginx.conf  README.md</span>`);}
+  else if(v==='top'||v==='htop'){toast('在实际模块中将打开进程监控视图');termLine(`<span class="t-out">  PID USER   %CPU  %MEM  COMMAND</span><span class="t-out">  883 mysql   8.7  13.9  mysqld</span>`);}
+  else{termLine(`<span class="t-out">${v}: command not found（原型仅演示少量命令）</span>`);}
+  termLine('');e.target.value='';
+});
+
+/* ============ 网络曲线 ============ */
+let netHistory=Array.from({length:30},()=>Math.random()*.5+.2);
+function drawNetSpark(){
+  const svg=document.getElementById('netSpark');const w=300,h=56;
+  const pts=netHistory.map((v,i)=>`${i/(netHistory.length-1)*w},${h-v*h-2}`).join(' ');
+  svg.innerHTML=`<polyline points="0,${h} ${pts} ${w},${h}" fill="rgba(84,138,247,.12)" stroke="none"/>
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`;
+}
+
+/* ============ 交互 ============ */
+function selectHost(name){
+  const h=HOSTS.find(x=>x.name===name);if(!h)return;
+  current=h;
+  if(!sessions.find(s=>s.name===name))sessions.push(h);
+  renderTree(document.getElementById('assetSearch').value);
+  renderSessions();fillOverview(h);fillFiles(h);initTerm(h);
+  document.getElementById('latency').textContent=(h.status==='off'?'—':Math.floor(Math.random()*20+8))+' ms';
+}
+function closeSession(i){const removed=sessions[i];sessions.splice(i,1);if(sessions.length===0){sessions=[current];}if(removed.name===current.name)current=sessions[0];renderSessions();}
+function toggleCard(el){el.parentElement.classList.toggle('collapsed');}
+function refreshAll(){fillOverview(current);refreshFiles();drawNetSpark();toast('概览数据已刷新');}
+function refreshFiles(){const b=document.getElementById('fileBody');b.style.opacity=.4;setTimeout(()=>{fillFiles(current);b.style.opacity=1;toast('文件列表已刷新');},280);}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1800);}
+document.getElementById('assetSearch').addEventListener('input',e=>renderTree(e.target.value));
+document.getElementById('procSearch').addEventListener('input',()=>renderProcs());
+document.getElementById('themeBtn').addEventListener('click',()=>{const r=document.documentElement;const light=r.getAttribute('data-theme')==='light';r.setAttribute('data-theme',light?'dark':'light');toast(light?'已切换到墨蓝深色主题':'已切换到晴空浅色主题');});
+// 模拟实时数据刷新
+setInterval(()=>{
+  netHistory.push(Math.random()*.6+.15);netHistory.shift();drawNetSpark();
+  document.getElementById('netDown').textContent=(Math.random()*2+.4).toFixed(2)+' MB/s';
+  document.getElementById('netUp').textContent=Math.floor(Math.random()*400+80)+' KB/s';
+},1600);
+
+/* 初始化 */
+renderTree();renderSessions();fillOverview(current);fillFiles(current);initTerm(current);
+</script>
+</body>
+</html>
