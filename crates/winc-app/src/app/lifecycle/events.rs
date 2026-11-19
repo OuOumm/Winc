@@ -469,7 +469,6 @@ impl App {
             | UserEvent::RemoteConnected
             | UserEvent::SshMonitorReady
             | UserEvent::SshFilesReady
-            | UserEvent::SshTransferred
             | UserEvent::RemoteListed
             | UserEvent::RemoteWatching
             | UserEvent::FormatPlanned
