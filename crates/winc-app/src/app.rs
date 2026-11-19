@@ -304,8 +304,6 @@ pub enum UserEvent {
     SshMonitorReady,
     /// SSH 工作区：后台已读完当前目录的文件列表。
     SshFilesReady,
-    /// SSH 工作区：后台文件传输已完成。
-    SshTransferred,
     /// 后台已读取三栏合并的两侧。
     GitMergeSides,
     /// 后台已取得日志的一批提交、一个提交的详情或一个文件的差异。
@@ -1069,7 +1067,6 @@ impl App {
             UserEvent::RemoteConnected => self.poll_remote(),
             UserEvent::SshMonitorReady => self.poll_ssh_monitor(),
             UserEvent::SshFilesReady => self.poll_ssh_files(),
-            UserEvent::SshTransferred => self.poll_ssh_transfer(),
             UserEvent::RemoteListed => self.poll_remote_listings(),
             UserEvent::RemoteWatching => self.poll_remote_watcher(),
             UserEvent::FormatPlanned => self.poll_formatting(),

@@ -125,49 +125,6 @@ pub(crate) type FileEntry = (String, bool, String, String, String);
 /// 文件列表回传槽：原始条目或错误。
 pub(crate) type FilesResult = Result<Vec<FileEntry>, String>;
 
-/// 一次文件传输的结果：方向、文件名、字节数或错误。
-pub(crate) struct TransferDone {
-    /// 是否上传（否则为下载）。
-    pub(crate) upload: bool,
-    /// 文件名（不含目录）。
-    pub(crate) name: String,
-    /// 成功时的字节数，或错误原因。
-    pub(crate) result: Result<u64, String>,
-}
-
-/// 读取并清空传输结果槽。
-pub(crate) fn take_transfer(
-    slot: &Arc<Mutex<Option<TransferDone>>>,
-) -> Option<TransferDone> {
-    slot.lock().unwrap_or_else(PoisonError::into_inner).take()
-}
-
-/// 传输状态提示：最近一次传输的结果，显示在文件栏底部。
-pub(crate) fn transfer_text(done: &TransferDone) -> String {
-    match &done.result {
-        Ok(bytes) => {
-            let verb = if done.upload { "上传" } else { "下载" };
-            format!("{verb} {} 完成（{}）", done.name, format_bytes(*bytes))
-        }
-        Err(error) => format!("{} 失败：{error}", done.name),
-    }
-}
-
-/// 把字节数格式化成易读的大小。
-pub(crate) fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
 
 pub(crate) fn take_files(slot: &Arc<Mutex<Option<FilesResult>>>) -> Option<FilesResult> {
     slot.lock().unwrap_or_else(PoisonError::into_inner).take()

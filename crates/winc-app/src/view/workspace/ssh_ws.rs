@@ -116,11 +116,6 @@ fn draw_files(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_monitor
     if ws.files.is_empty() && ws.file_error.is_none() {
         ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, list_y, rect.w, ROW), t!("workspace-ssh-empty"), p.text_dim, rect);
     }
-    // 底部：最近一次传输结果。
-    if let Some(status) = &app.remote.transfer_status {
-        let row = Rect::new(rect.x, rect.bottom() - 18.0, rect.w, 18.0);
-        ui_text_small(frame, app, rect.x + PAD, row, status, p.text_dim, rect);
-    }
 }
 
 /// 绘制服务器概览。

@@ -210,11 +210,6 @@ pub(crate) struct RemoteState {
     pub(crate) monitor: Arc<Mutex<Option<crate::app::ssh_monitor::MonitorResult>>>,
     /// 后台读取文件列表的回传槽。
     pub(crate) ssh_files: Arc<Mutex<Option<crate::app::ssh_monitor::FilesResult>>>,
-    /// 后台文件传输的结果槽。
-    pub(crate) ssh_transfer:
-        Arc<Mutex<Option<crate::app::ssh_monitor::TransferDone>>>,
-    /// 文件栏底部显示的最近一次传输结果。
-    pub(crate) transfer_status: Option<String>,
 }
 
 impl Default for RemoteState {
@@ -238,8 +233,6 @@ impl Default for RemoteState {
             ws: None,
             monitor: Arc::default(),
             ssh_files: Arc::default(),
-            ssh_transfer: Arc::default(),
-            transfer_status: None,
         }
     }
 }
@@ -703,6 +696,17 @@ fn open(
     }
 }
 
+/// 本机下载目录：用户主目录下的 `Downloads`，没有时回退主目录或临时目录。
+fn download_dir() -> std::path::PathBuf {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from);
+    home.as_ref()
+        .map(|h| h.join("Downloads"))
+        .filter(|p| winc_backend::fs::is_dir(p))
+        .or_else(|| home.clone())
+        .unwrap_or_else(std::env::temp_dir)
+}
+
 impl App {
     /// 远程模块是否启用。
     pub(crate) fn remote_enabled(&self) -> bool {
@@ -885,77 +889,29 @@ impl App {
         });
     }
 
-    /// 上传本地文件 `local` 到当前会话目录。
+    /// 上传本地文件（或目录）`local` 到当前会话目录。
+    ///
+    /// 走文件树既有的复制通道：流式传输、显示进度、可取消、目录递归、重名自动改名，
+    /// 并保留 Unix 权限位。
     pub(crate) fn ssh_upload(&mut self, local: std::path::PathBuf) {
         let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) else {
             return;
         };
-        let target = session.target.clone();
-        let dir = session.cwd.clone();
-        let Some(name) = local.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            return;
-        };
-        let remote = winc_backend::virtual_path(
-            &target,
-            format!("{dir}/{name}").trim_start_matches("//").as_bytes(),
-        );
-        let slot = Arc::clone(&self.remote.ssh_transfer);
-        self.spawn_blocking_then(UserEvent::SshTransferred, move || {
-            let result = winc_backend::fs::copy(&local, &remote).map_err(|e| e.to_string());
-            *slot.lock().unwrap_or_else(PoisonError::into_inner) =
-                Some(crate::app::ssh_monitor::TransferDone {
-                    upload: true,
-                    name,
-                    result,
-                });
-        });
+        let dir = winc_backend::virtual_path(&session.target, session.cwd.as_bytes());
+        self.copy_entries_into(vec![local], dir);
     }
 
-    /// 下载当前会话目录中名为 `name` 的文件到本机下载目录。
+    /// 下载当前会话目录中名为 `name` 的条目到本机下载目录。
+    ///
+    /// 同样走复制通道：有进度、可取消、支持目录，重名不覆盖（改名为副本）。
     pub(crate) fn ssh_download(&mut self, name: String) {
         let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) else {
             return;
         };
-        let target = session.target.clone();
-        let dir = session.cwd.clone();
-        let remote = winc_backend::virtual_path(
-            &target,
-            format!("{dir}/{name}").trim_start_matches("//").as_bytes(),
-        );
-        // 下载到用户主目录下的 Downloads（不存在时用临时目录）。
-        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-            .map(std::path::PathBuf::from);
-        let base = home
-            .as_ref()
-            .map(|h| h.join("Downloads"))
-            .filter(|p| winc_backend::fs::is_dir(p))
-            .or_else(|| home.clone())
-            .unwrap_or_else(std::env::temp_dir);
-        let local = base.join(&name);
-        let slot = Arc::clone(&self.remote.ssh_transfer);
-        self.spawn_blocking_then(UserEvent::SshTransferred, move || {
-            let result = winc_backend::fs::copy(&remote, &local).map_err(|e| e.to_string());
-            *slot.lock().unwrap_or_else(PoisonError::into_inner) =
-                Some(crate::app::ssh_monitor::TransferDone {
-                    upload: false,
-                    name,
-                    result,
-                });
-        });
-    }
-
-    /// 主线程取回传输结果：更新状态文字，上传成功后刷新文件列表。
-    pub(crate) fn poll_ssh_transfer(&mut self) {
-        use crate::app::ssh_monitor;
-        let Some(done) = ssh_monitor::take_transfer(&self.remote.ssh_transfer) else {
-            return;
-        };
-        let uploaded = done.upload && done.result.is_ok();
-        self.remote.transfer_status = Some(ssh_monitor::transfer_text(&done));
-        if uploaded {
-            self.ssh_read_files();
-        }
-        self.request_redraw();
+        let dir = winc_backend::virtual_path(&session.target, session.cwd.as_bytes());
+        let remote = winc_backend::join(&dir, &name);
+        let local = download_dir();
+        self.download(vec![remote], local);
     }
 
     /// 处理 SSH 工作区中的点击。
