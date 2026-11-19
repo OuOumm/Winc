@@ -41,6 +41,20 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         list_clip,
     );
 
+    // 「＋ 新建」按钮：打开连接对话框，填写主机、端口、密钥。
+    let new_btn = Rect::new(list.right() - 62.0, list.y + 1.0, 54.0, 22.0);
+    frame.rect_clipped(new_btn, p.hover, crate::theme::RADIUS_ROW, list_clip);
+    ui_text_small(
+        frame,
+        app,
+        new_btn.x + 6.0,
+        new_btn,
+        &format!("＋ {}", t!("workspace-ssh-new")),
+        p.text_muted,
+        list_clip,
+    );
+    app.hits.ssh_ws.push((new_btn, crate::app::ssh_monitor::SshWsTarget::NewHost));
+
     let mut y = title_row.bottom() + 2.0;
     if assets.is_empty() {
         let text = t!("workspace-sidebar-ssh-no-host");
@@ -69,6 +83,12 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
             if selected { p.text } else { p.text_muted },
             list_clip,
         );
+        // 行尾的移除按钮：从 ssh 配置里删掉这台主机。
+        let remove = Rect::new(row.right() - 18.0, row.y + 4.0, 14.0, ROW - 8.0);
+        ui_text_small(frame, app, remove.x, remove, "✕", p.text_dim, list_clip);
+        app.hits
+            .ssh_ws
+            .push((remove, crate::app::ssh_monitor::SshWsTarget::RemoveHost(i)));
         app.hits.ssh_ws.push((row, crate::app::ssh_monitor::SshWsTarget::Asset(i)));
         y += ROW;
     }

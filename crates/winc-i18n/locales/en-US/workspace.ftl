@@ -522,3 +522,5 @@ workspace-backup-failed = Couldn’t back up unsaved changes: { $error }
 workspace-ssh-upload = Upload
 workspace-ssh-up = Up
 workspace-ssh-download = Download
+workspace-ssh-new = New
+workspace-ssh-removed = Removed { $host } from ~/.ssh/config

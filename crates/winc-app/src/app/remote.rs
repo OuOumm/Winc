@@ -204,6 +204,8 @@ pub(crate) struct RemoteState {
     files: Option<(PathBuf, Vec<crate::cli::Target>)>,
     /// SSH 资产侧栏中选中的主机下标；进入视图或列表变化时会被夹到有效范围内。
     pub(crate) asset_selection: usize,
+    /// 连接对话框是「添加 SSH 连接」打开的：成功后写进 `~/.ssh/config`。
+    pub(crate) adding_host: bool,
     /// SSH 工作区（终端 + 文件 + 服务器概览）；没有会话时为 `None`。
     pub(crate) ws: Option<crate::app::ssh_monitor::Workspace>,
     /// 后台采集概览的回传槽。
@@ -230,6 +232,7 @@ impl Default for RemoteState {
             watching: Arc::default(),
             files: None,
             asset_selection: 0,
+            adding_host: false,
             ws: None,
             monitor: Arc::default(),
             ssh_files: Arc::default(),
@@ -696,6 +699,106 @@ fn open(
     }
 }
 
+/// 把一条 `Host` 记录追加到用户的 `~/.ssh/config`。
+///
+/// 已经有同名 `Host` 时不重复写入。写入前确保目录与文件的权限符合 `ssh` 的要求
+/// （目录 0700、文件 0600）。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "只访问本机：用户主目录中的 ssh 配置"
+)]
+fn append_to_ssh_config(host: &str, port: Option<u16>, key: &str) -> bool {
+    let Some(path) = ssh_config() else {
+        return false;
+    };
+    if ensure_config(&path).is_err() {
+        return false;
+    }
+    // 已有同名 Host 就不重复加。
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && config_hosts(&text).iter().any(|h| h == host)
+    {
+        return true;
+    }
+    let mut block = String::new();
+    if !std::fs::read_to_string(&path)
+        .map(|t| t.trim_end().ends_with("\n\n") || t.trim().is_empty())
+        .unwrap_or(true)
+    {
+        block.push('\n');
+    }
+    block.push_str(&format!("Host {host}\n"));
+    block.push_str(&format!("    HostName {host}\n"));
+    if let Some(port) = port {
+        block.push_str(&format!("    Port {port}\n"));
+    }
+    if !key.trim().is_empty() {
+        block.push_str(&format!("    IdentityFile {}\n", key.trim()));
+    }
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, block.as_bytes()))
+        .is_ok()
+}
+
+/// 从用户的 `~/.ssh/config` 中删掉 `Host` 等于 `host` 的那一段（连同其后的选项行）。
+///
+/// 只删第一处精确匹配的 `Host` 段；`Host a b` 这样一行多个名字时只去掉该名字，
+/// 名字全部去掉时才删整段。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "只访问本机：用户主目录中的 ssh 配置"
+)]
+fn remove_from_ssh_config(host: &str) -> bool {
+    let Some(path) = ssh_config() else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut changed = false;
+    let mut skipping = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // 新的 Host 段开始：重置跳过状态。
+        if let Some(rest) = trimmed
+            .strip_prefix("Host ")
+            .or_else(|| trimmed.strip_prefix("host "))
+        {
+            if skipping {
+                skipping = false;
+            }
+            let names: Vec<&str> = rest.split_whitespace().collect();
+            if names.contains(&host) {
+                changed = true;
+                let kept: Vec<&str> = names.iter().copied().filter(|n| *n != host).collect();
+                if kept.is_empty() {
+                    // 整段删掉：跳过本行及后续选项行。
+                    skipping = true;
+                    continue;
+                }
+                out.push_str(&format!("Host {}\n", kept.join(" ")));
+                continue;
+            }
+        }
+        if skipping {
+            // 选项行（缩进）随段跳过；空行或注释也一并跳过，直到下一个 Host。
+            if trimmed.is_empty() || trimmed.starts_with('#') || line.starts_with(' ') || line.starts_with('\t') {
+                continue;
+            }
+            skipping = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !changed {
+        return false;
+    }
+    std::fs::write(&path, out).is_ok() && refresh_hosts() > 0
+}
+
 /// 本机下载目录：用户主目录下的 `Downloads`，没有时回退主目录或临时目录。
 fn download_dir() -> std::path::PathBuf {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -762,6 +865,19 @@ impl App {
     /// 连接成功后建立会话、打开远端终端并开始采集概览。
     pub(crate) fn ssh_workspace_connected(&mut self, target: Target, home: String) {
         use crate::app::ssh_monitor::Session;
+
+        // 从「添加 SSH 连接」进来：把主机写进 ~/.ssh/config，之后资产列表里就能看到。
+        if std::mem::take(&mut self.remote.adding_host) {
+            let port = target.port();
+            let key = self
+                .state
+                .remote_key(target.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            if append_to_ssh_config(target.as_str(), port, &key) {
+                self.ssh_refresh();
+            }
+        }
 
         // 同一主机已有会话则激活它，否则新建。
         let ws = self.remote.ws.get_or_insert_with(Default::default);
@@ -960,6 +1076,21 @@ impl App {
                         });
                     *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some((active, result));
                 });
+            }
+            SshWsTarget::NewHost => {
+                // 打开连接对话框：填主机、端口、密钥，连上后写进 ~/.ssh/config。
+                self.remote.adding_host = true;
+                self.open_connect_dialog("", "", false);
+            }
+            SshWsTarget::RemoveHost(i) => {
+                let host = self.ssh_assets().into_iter().nth(i);
+                if let Some(host) = host {
+                    let removed = remove_from_ssh_config(&host);
+                    self.ssh_refresh();
+                    if removed {
+                        self.flash(t!("workspace-ssh-removed", host = host));
+                    }
+                }
             }
             SshWsTarget::Close => self.ssh_close_workspace(),
             SshWsTarget::Session(i) => {
@@ -1887,5 +2018,20 @@ Host -oProxyCommand=x a;b
             assert_eq!(mode & 0o077, 0, "{name}");
         }
         remote::disconnect(&target);
+    }
+
+    #[test]
+    fn appended_host_blocks_are_recognized_and_removable() {
+        // 追加格式（与 append_to_ssh_config 一致）能被 config_hosts 识别。
+        let text = "Host alpha\n    HostName alpha\n    Port 2222\n    IdentityFile ~/.ssh/id\n";
+        assert_eq!(config_hosts(text), vec!["alpha".to_owned()]);
+
+        // 多行 Host 段：第二个 Host 之前的选项不会串到它身上。
+        let text = "Host alpha\n    HostName alpha\nHost beta\n    HostName beta\n";
+        assert_eq!(config_hosts(text), vec!["alpha".to_owned(), "beta".to_owned()]);
+
+        // 通配与取反不算具体主机。
+        let text = "Host *\n    ServerAliveInterval 30\nHost !bad gamma\n";
+        assert_eq!(config_hosts(text), vec!["gamma".to_owned()]);
     }
 }

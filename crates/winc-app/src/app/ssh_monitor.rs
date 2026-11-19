@@ -64,6 +64,10 @@ pub(crate) enum SshWsTarget {
     Upload,
     /// 下载文件列表中的一行。
     Download(usize),
+    /// 新建 SSH 连接（打开连接对话框）。
+    NewHost,
+    /// 从 `~/.ssh/config` 删除资产行对应的主机。
+    RemoveHost(usize),
 }
 
 /// 一个 SSH 会话。
