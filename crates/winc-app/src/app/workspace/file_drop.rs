@@ -24,6 +24,8 @@ pub enum DropZone {
     Tree(PathBuf),
     /// 终端：输入转义过的路径。
     Terminal,
+    /// SSH 工作区的文件栏：上传到当前远端目录。
+    SshFiles,
     /// 其他位置：文件在编辑区打开，目录切换为工作区。落在编辑区里时记着落点所在的窗格，
     /// 以及贴近的那条边（文件在那一侧拆出的新窗格里打开）。
     Open(Option<PaneDrop>),
@@ -45,6 +47,12 @@ impl App {
     pub(in crate::app) fn drop_zone(&self, x: f32, y: f32) -> DropZone {
         if self.terminal_takes_drop(x, y) {
             return DropZone::Terminal;
+        }
+        // SSH 工作区：落在文件栏上时上传到当前远端目录。
+        if let Some(parts) = self.hits.ssh_ws_parts
+            && parts.files.contains(x, y)
+        {
+            return DropZone::SshFiles;
         }
         let on_tree =
             self.panels.sidebar.view == SidebarView::Files && self.layout.sidebar.right() > 0.0;
@@ -131,6 +139,10 @@ impl App {
             DropZone::Tree(dir) => Some(dir),
             DropZone::Terminal => {
                 self.drop_path_on_terminal(path);
+                return;
+            }
+            DropZone::SshFiles => {
+                self.ssh_upload(path.to_path_buf());
                 return;
             }
             DropZone::Open(Some(PaneDrop {

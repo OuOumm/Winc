@@ -123,7 +123,7 @@ pub fn folded_tools(kept: usize) -> &'static [TreeTool] {
     &TreeTool::ALL[kept.min(TreeTool::ALL.len())..]
 }
 
-/// 侧栏显示的内容：文件树、全局搜索，或 Git 的提交视图。
+/// 侧栏显示的内容：文件树、全局搜索、Git 的提交视图，或 SSH 资产管理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidebarView {
     /// 文件树。
@@ -135,6 +135,10 @@ pub enum SidebarView {
     ///
     /// 只在 Git 模块开着、目录在仓库里时有。
     Commit,
+    /// SSH 资产管理：连接与管理多台主机。
+    ///
+    /// 只在远程模块开着时有。
+    Ssh,
 }
 
 impl SidebarView {
@@ -147,6 +151,9 @@ impl SidebarView {
             }
             SidebarView::Commit => {
                 with_key(t!("workspace-sidebar-commit"), Some(Action::ShowCommit))
+            }
+            SidebarView::Ssh => {
+                with_key(t!("workspace-sidebar-ssh"), Some(Action::RemoteConnect))
             }
         }
     }

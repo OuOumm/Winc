@@ -5,5 +5,7 @@ use super::*;
 pub(super) mod outline;
 pub(super) mod panel;
 pub(super) mod sidebar;
+pub(super) mod ssh;
+pub(super) mod ssh_ws;
 pub(super) mod start;
 pub(super) mod top_bar;

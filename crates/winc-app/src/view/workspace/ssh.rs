@@ -1,0 +1,80 @@
+//! SSH 资产侧栏：列出 `~/.ssh/config` 中的主机，显示连接状态与统计。
+//!
+//! 这是 SSH 侧栏视图的绘制。资产来自远程模块已有的主机读取（`App::ssh_assets`），
+//! 不保存任何凭据。点击第 4 段「SSH」标签切换进来；再次点击标签会重新读取主机列表。
+
+use winc_i18n::t;
+use winc_render::{Frame, Rect};
+
+use super::*;
+use super::sidebar::ContextBar;
+
+/// 资产列表一行的高度（逻辑像素），与提交列表行高一致。
+const ROW: f32 = 24.0;
+/// 列表两列的左右内边距（逻辑像素）。
+const PAD: f32 = 12.0;
+
+/// 绘制 SSH 资产视图：第二行上下文栏 + 资产列表 + 底部统计。
+pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
+    let p = app.palette;
+    let sidebar = app.layout.sidebar;
+    let header = app.layout.sidebar_header;
+
+    // 上下文栏（项目与分支），与其他视图一致。SSH 视图没有右端工具按钮，占满标题行。
+    let bar = ContextBar::new(app, frame);
+    super::sidebar::draw_context_bar(app, frame, &bar, header.right() - 8.0);
+
+    // 资产列表区域：第二行以下到侧栏底部。
+    let list = Rect::new(sidebar.x, header.bottom() + 4.0, sidebar.w, (sidebar.bottom() - header.bottom() - 4.0).max(0.0));
+    let list_clip = list.intersect(sidebar);
+
+    let assets = app.ssh_assets();
+    let title = t!("workspace-sidebar-ssh-assets");
+    let title_row = Rect::new(list.x, list.y, list.w, 24.0);
+    ui_text_small(
+        frame,
+        app,
+        list.x + PAD,
+        title_row,
+        format!("{title}  ·  {}", assets.len()).as_str(),
+        p.text_muted,
+        list_clip,
+    );
+
+    let mut y = title_row.bottom() + 2.0;
+    if assets.is_empty() {
+        let text = t!("workspace-sidebar-ssh-no-host");
+        ui_text_small(frame, app, list.x + PAD, Rect::new(list.x, y, list.w, ROW), text, p.text_dim, list_clip);
+        return;
+    }
+
+    for (i, host) in assets.iter().enumerate() {
+        let row = Rect::new(list.x + 4.0, y, list.w - 8.0, ROW);
+        if row.bottom() > list.bottom() + ROW {
+            break;
+        }
+        let selected = i == app.remote.asset_selection;
+        if selected {
+            frame.rect_clipped(row, p.selection, crate::theme::RADIUS_ROW, list_clip);
+        }
+        // 状态点：能连的主机统一用强调色（真实连通性在连接时确认）。
+        let dot = Rect::new(row.x + PAD - 6.0, row.y + (ROW - 6.0) / 2.0, 6.0, 6.0);
+        frame.rect_clipped(dot, p.accent, 3.0, list_clip);
+        ui_text(
+            frame,
+            app,
+            row.x + PAD + 8.0,
+            row,
+            host,
+            if selected { p.text } else { p.text_muted },
+            list_clip,
+        );
+        app.hits.ssh_ws.push((row, crate::app::ssh_monitor::SshWsTarget::Asset(i)));
+        y += ROW;
+    }
+
+    // 底部提示：再次点击 SSH 标签刷新；连接用「连接到 SSH 主机」命令。
+    let hint = t!("workspace-sidebar-ssh-hint");
+    let hint_row = Rect::new(sidebar.x, sidebar.bottom() - 24.0, sidebar.w, 24.0);
+    ui_text_small(frame, app, sidebar.x + PAD, hint_row, hint, p.text_dim, hint_row.intersect(sidebar));
+}

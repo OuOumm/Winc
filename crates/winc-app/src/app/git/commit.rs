@@ -1043,9 +1043,13 @@ impl Default for CommitState {
 impl App {
     /// 当前能用的侧栏视图：文件、搜索，Git 模块开着且目录在仓库里时再加提交。
     pub(crate) fn sidebar_views(&self) -> Vec<crate::layout::SidebarView> {
+        use crate::layout::SidebarView;
         let mut views = crate::layout::BASE_VIEWS.to_vec();
         if self.git.root.is_some() {
-            views.push(crate::layout::SidebarView::Commit);
+            views.push(SidebarView::Commit);
+        }
+        if self.remote_enabled() {
+            views.push(SidebarView::Ssh);
         }
         views
     }
@@ -1058,6 +1062,9 @@ impl App {
         let mut views = self.sidebar_views();
         if !views.contains(&SidebarView::Commit) && self.view_tab_share(SidebarView::Commit) > 0.0 {
             views.push(SidebarView::Commit);
+        }
+        if !views.contains(&SidebarView::Ssh) && self.view_tab_share(SidebarView::Ssh) > 0.0 {
+            views.push(SidebarView::Ssh);
         }
         let views: Vec<_> = views
             .into_iter()
@@ -1074,6 +1081,7 @@ impl App {
                 .module_fx
                 .commit_tab
                 .share(self.git.root.is_some()),
+            crate::layout::SidebarView::Ssh => self.motion.module_fx.remote.share(self.remote_enabled()),
             _ => 1.0,
         }
     }
@@ -1086,6 +1094,9 @@ impl App {
                 .module_fx
                 .commit_tab
                 .opacity(self.git.root.is_some()),
+            crate::layout::SidebarView::Ssh => {
+                self.motion.module_fx.remote.opacity(self.remote_enabled())
+            }
             _ => 1.0,
         }
     }
@@ -1423,6 +1434,19 @@ impl App {
             self.git_refresh();
         }
         self.focus = self.commit_view_focus();
+        self.request_redraw();
+    }
+
+    /// 打开 SSH 资产视图，焦点落在资产列表上。远程模块关闭时不做任何事（该 tab 不会出现）。
+    pub(in crate::app) fn show_ssh(&mut self) {
+        if !self.remote_enabled() {
+            return;
+        }
+        if !self.panels.sidebar.visible {
+            self.set_sidebar(true);
+        }
+        self.set_sidebar_view(crate::layout::SidebarView::Ssh);
+        self.focus = Focus::Tree;
         self.request_redraw();
     }
 }

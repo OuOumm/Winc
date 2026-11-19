@@ -85,6 +85,28 @@ input{font-family:inherit}
   width:248px;flex:0 0 248px;background:var(--card);border-right:1px solid var(--line);
   display:flex;flex-direction:column;min-height:0;
 }
+/* Winc 顶栏视图切换：分段控件（文件/搜索/提交/SSH）*/
+.view-tabs{
+  height:38px;flex:0 0 38px;display:flex;align-items:center;justify-content:center;
+  padding:0 10px;border-bottom:1px solid var(--line);background:var(--card);
+}
+.seg-track{
+  display:flex;align-items:center;gap:2px;padding:2px;border-radius:8px;
+  background:color-mix(in srgb, var(--muted) 16%, transparent);width:100%;
+}
+.seg{
+  flex:1;height:26px;display:flex;align-items:center;justify-content:center;gap:5px;
+  border-radius:6px;color:var(--muted);font-size:11px;position:relative;cursor:pointer;
+  transition:background .15s,color .15s;white-space:nowrap;
+}
+.seg:hover{background:color-mix(in srgb, var(--muted) 12%, transparent);color:var(--text)}
+.seg.active{
+  background:var(--card);color:var(--text);
+  box-shadow:0 1px 3px rgba(0,0,0,.28),0 0 0 1px color-mix(in srgb, var(--muted) 22%, transparent);
+}
+.seg svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.seg .dot{position:absolute;top:3px;right:6px;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+.seg.ssh.active{color:var(--accent)}
 .panel-head{
   height:40px;flex:0 0 40px;display:flex;align-items:center;padding:0 12px;gap:8px;
   border-bottom:1px solid var(--line);
@@ -274,6 +296,24 @@ table.pt td.pname{font-family:var(--font);color:var(--text)}
   <div class="body">
     <!-- 左：资产树 -->
     <aside class="assets">
+      <!-- 顶栏视图切换（对齐 Winc 真实界面：文件/搜索/提交/SSH 分段控件）-->
+      <div class="view-tabs">
+        <div class="seg-track">
+          <div class="seg" onclick="switchView('files')" title="文件">
+            <svg viewBox="0 0 16 16"><path d="M2.5 3.5h4l1.3 1.5h5.7v7.5H2.5z"/></svg>
+          </div>
+          <div class="seg" onclick="switchView('search')" title="搜索">
+            <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/></svg>
+          </div>
+          <div class="seg" onclick="switchView('commit')" title="提交">
+            <svg viewBox="0 0 16 16"><circle cx="8" cy="3.5" r="2"/><circle cx="8" cy="12.5" r="2"/><path d="M8 5.5v5M3 8h10"/></svg>
+            <span class="dot"></span>
+          </div>
+          <div class="seg ssh active" onclick="switchView('ssh')" title="SSH 远程">
+            <svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 5.5h13M4 8l1.5 1.5L4 11M7.5 11h3"/></svg>
+          </div>
+        </div>
+      </div>
       <div class="panel-head"><span class="ttl">SSH 资产</span><span class="badge" id="hostCount">6</span></div>
       <div class="search-box"><span class="si">⌕</span><input id="assetSearch" placeholder="搜索主机 / 分组…" /></div>
       <div class="tree" id="tree"></div>
@@ -583,6 +623,21 @@ function closeSession(i){const removed=sessions[i];sessions.splice(i,1);if(sessi
 function toggleCard(el){el.parentElement.classList.toggle('collapsed');}
 function refreshAll(){fillOverview(current);refreshFiles();drawNetSpark();toast('概览数据已刷新');}
 function refreshFiles(){const b=document.getElementById('fileBody');b.style.opacity=.4;setTimeout(()=>{fillFiles(current);b.style.opacity=1;toast('文件列表已刷新');},280);}
+function switchView(v){
+  document.querySelectorAll('.seg').forEach(s=>s.classList.remove('active'));
+  const map={files:'文件视图',search:'搜索视图',commit:'提交视图',ssh:'SSH 远程'};
+  if(v==='ssh'){
+    document.querySelector('.seg.ssh').classList.add('active');
+  }else{
+    document.querySelector(`.seg:not(.ssh)`).classList.add('active');
+    // 原型只实现 SSH 模块，其余视图用提示表示切换（实际模块中由 SidebarView 枚举驱动内容区）。
+    toast(`已切换到「${map[v]}」— 原型仅实现 SSH 模块，点 SSH 段返回`);
+    setTimeout(()=>{
+      document.querySelectorAll('.seg').forEach(s=>s.classList.remove('active'));
+      document.querySelector('.seg.ssh').classList.add('active');
+    },900);
+  }
+}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1800);}
 document.getElementById('assetSearch').addEventListener('input',e=>renderTree(e.target.value));
 document.getElementById('procSearch').addEventListener('input',()=>renderProcs());

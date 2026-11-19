@@ -17,6 +17,7 @@ mod release_notes;
 pub(crate) mod remote;
 pub(crate) mod scroll;
 mod settings;
+pub(crate) mod ssh_monitor;
 pub(crate) mod setup;
 #[cfg(test)]
 mod snapshot;
@@ -299,6 +300,12 @@ pub enum UserEvent {
     RemoteStage,
     /// 远端主机有无响应的状况变了：状态栏的连接按钮随之重绘。
     RemoteHealth,
+    /// SSH 工作区：后台已采集完一台主机的服务器概览。
+    SshMonitorReady,
+    /// SSH 工作区：后台已读完当前目录的文件列表。
+    SshFilesReady,
+    /// SSH 工作区：后台文件传输已完成。
+    SshTransferred,
     /// 后台已读取三栏合并的两侧。
     GitMergeSides,
     /// 后台已取得日志的一批提交、一个提交的详情或一个文件的差异。
@@ -528,6 +535,8 @@ pub enum Hover {
     TreeMore,
     /// 侧栏顶部的「文件」「搜索」切换按钮。
     ViewTab(SidebarView),
+    /// SSH 工作区或资产列表中的按钮。
+    SshWs(crate::app::ssh_monitor::SshWsTarget),
     /// 搜索面板中的按钮。
     Panel(PanelButton),
     /// 搜索结果的行序号。
@@ -1058,6 +1067,9 @@ impl App {
             UserEvent::GitBase => self.poll_bases(),
             UserEvent::GitOperated => self.poll_branch_ops(),
             UserEvent::RemoteConnected => self.poll_remote(),
+            UserEvent::SshMonitorReady => self.poll_ssh_monitor(),
+            UserEvent::SshFilesReady => self.poll_ssh_files(),
+            UserEvent::SshTransferred => self.poll_ssh_transfer(),
             UserEvent::RemoteListed => self.poll_remote_listings(),
             UserEvent::RemoteWatching => self.poll_remote_watcher(),
             UserEvent::FormatPlanned => self.poll_formatting(),
