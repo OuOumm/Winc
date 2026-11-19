@@ -339,6 +339,13 @@ impl App {
         if self.outline_divider().contains(x, y) {
             return Target::OutlineDivider;
         }
+        // SSH 资产列表与工作区中的按钮：必须先于 `panel_hover_at` 判定。
+        //
+        // 侧栏整块都会被 `panel_hover_at` 归入 `Target::Panel`，若把 SSH 的命中放在它之后，
+        // 资产行的点击会被面板吞掉并落到下方的文件树逻辑上（表现为点一下穿透到文件列表）。
+        if let Some(t) = hit(&self.hits.ssh_ws, x, y) {
+            return Target::SshWs(t);
+        }
         if let Some(hover) = self.panel_hover_at(x, y) {
             return Target::Panel(hover);
         }
@@ -428,10 +435,7 @@ impl App {
         if let Some(index) = self.pane_divider_at(x, y) {
             return Target::PaneDivider(index);
         }
-        // SSH 工作区与侧栏资产列表中的按钮先于普通编辑区判断。
-        if let Some(t) = hit(&self.hits.ssh_ws, x, y) {
-            return Target::SshWs(t);
-        }
+        // SSH 工作区与侧栏资产列表中的按钮在前面已判定（先于 panel_hover_at）。
         if let Some(hit) = hit(&self.hits.terminal, x, y) {
             return Target::TerminalHeader(hit);
         }

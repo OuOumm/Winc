@@ -441,3 +441,5 @@ workspace-backup-failed = 无法备份未保存的修改：{ $error }
 workspace-ssh-upload = 上传
 workspace-ssh-up = 上级
 workspace-ssh-download = 下载
+workspace-ssh-new = 新建
+workspace-ssh-removed = 已从 ~/.ssh/config 移除 { $host }
