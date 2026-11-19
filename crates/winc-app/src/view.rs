@@ -309,6 +309,10 @@ fn draw_file_drop(app: &App, frame: &mut Frame<'_>) {
     let l = &app.layout;
     let area = match app.file_hover() {
         Some(DropZone::Terminal) => l.terminal,
+        Some(DropZone::SshFiles) => match app.hits.ssh_ws_parts {
+            Some(parts) => parts.files,
+            None => return,
+        },
         Some(DropZone::Open(Some(drop))) => {
             let Some(area) = app.drop_area(drop.pane, drop.edge) else {
                 return;

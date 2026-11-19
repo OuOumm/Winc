@@ -307,6 +307,14 @@ impl App {
                 SidebarView::Files => self.show_files(),
                 SidebarView::Search => self.open_global_search(false),
                 SidebarView::Commit => self.show_commit(),
+                SidebarView::Ssh => {
+                    // 已停留在 SSH 视图时再次点击标签，重新读取主机列表。
+                    if self.panels.sidebar.view == SidebarView::Ssh {
+                        self.ssh_refresh();
+                    } else {
+                        self.show_ssh();
+                    }
+                }
             }
 
             return true;

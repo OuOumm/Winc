@@ -544,6 +544,13 @@ impl App {
             );
             l.terminal_divider = Rect::default();
         }
+        // SSH 工作区：终端面板占据工作区左栏，文件与概览由工作区视图绘制在右侧。
+        // 放在最大化处理之后，确保 SSH 布局不被覆盖。
+        if self.remote.ws.is_some() {
+            let parts = crate::app::ssh_monitor::Parts::new(l.editor);
+            l.terminal = parts.terminal;
+            l.terminal_divider = Rect::default();
+        }
     }
 
     /// 最大化的面板：铺满编辑区一栏 `column`，编辑区、标签栏都不占地方；⌘P 面板仍在这一栏

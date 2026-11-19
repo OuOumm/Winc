@@ -64,6 +64,12 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) {
     app.preview.pdf.page = None;
     app.preview.pdf.strip = Rect::default();
 
+    // SSH 管理工作区接管编辑区。
+    if app.remote.ws.is_some() {
+        workspace::ssh_ws::draw(app, frame);
+        return;
+    }
+
     let Some(index) = app.editor.active else {
         // 没有标签：释放缩放后的预览缓存，避免继续占用内存。
         app.preview.picture_cache = None;

@@ -448,7 +448,17 @@ impl App {
             UserEvent::GitQuestion => self.poll_git_questions(),
             UserEvent::RemoteQuestion => self.poll_remote_questions(),
             UserEvent::RemoteStage => self.remote_stage_changed(),
-            UserEvent::RemoteHealth => self.request_redraw(),
+            UserEvent::RemoteHealth => {
+                // 借连接保活的周期事件刷新 SSH 概览（距上次超过 15 秒时）。
+                let due = self.remote.ws.as_ref().and_then(|ws| ws.active()).and_then(|s| {
+                    s.last_collect.map(|t| t.elapsed() >= std::time::Duration::from_secs(15))
+                }).unwrap_or(false);
+                if due {
+                    let active = self.remote.ws.as_ref().map(|ws| ws.active).unwrap_or(0);
+                    self.ssh_collect(active);
+                }
+                self.request_redraw();
+            }
             UserEvent::RemoteClosed(target) => self.remote_closed(&target),
             UserEvent::ReleaseNotes(notes) => self.show_release_notes(notes),
             done @ (UserEvent::GitStatus
@@ -457,6 +467,9 @@ impl App {
             | UserEvent::GitBase
             | UserEvent::GitOperated
             | UserEvent::RemoteConnected
+            | UserEvent::SshMonitorReady
+            | UserEvent::SshFilesReady
+            | UserEvent::SshTransferred
             | UserEvent::RemoteListed
             | UserEvent::RemoteWatching
             | UserEvent::FormatPlanned

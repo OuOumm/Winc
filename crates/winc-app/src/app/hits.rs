@@ -51,6 +51,10 @@ pub struct Hits {
     pub(crate) merge_card: Option<Rect>,
     /// 标签栏上各个按钮的位置，绘制时记下。
     pub(crate) terminal: Vec<(Rect, crate::app::terminal::HeaderHit)>,
+    /// SSH 工作区中可点击的区域。
+    pub(crate) ssh_ws: Vec<(Rect, crate::app::ssh_monitor::SshWsTarget)>,
+    /// SSH 工作区三栏矩形，绘制时记录。
+    pub(crate) ssh_ws_parts: Option<crate::app::ssh_monitor::Parts>,
     /// 卡片上可点击的控件，绘制时更新。
     pub(crate) changes: Vec<(Rect, ChangeTarget)>,
     /// 卡片的位置，绘制时更新；点击卡片外部时关闭卡片。
@@ -122,6 +126,8 @@ impl Hits {
             merge,
             merge_card,
             terminal,
+            ssh_ws,
+            ssh_ws_parts,
             changes,
             changes_card,
             notice_card,
@@ -159,6 +165,8 @@ impl Hits {
         merge.clear();
         *merge_card = None;
         terminal.clear();
+        ssh_ws.clear();
+        *ssh_ws_parts = None;
         changes.clear();
         *changes_card = None;
         *notice_card = None;

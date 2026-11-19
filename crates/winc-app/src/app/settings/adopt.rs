@@ -103,6 +103,10 @@ impl App {
         }
         if stop_remote {
             self.stop_remote();
+            // 远程模块关闭后 SSH 侧栏视图不再可用，停留在它上面时切回文件树。
+            if self.panels.sidebar.view == crate::layout::SidebarView::Ssh {
+                self.set_sidebar_view(crate::layout::SidebarView::Files);
+            }
         }
         // 模块关闭后它的那一页不再列出：设置停在该页时改到「模块」页。
         let page = self.settings.selected.page();

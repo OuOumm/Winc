@@ -95,6 +95,7 @@ pub(super) fn draw_view_tabs(app: &App, frame: &mut Frame<'_>) {
             SidebarView::Files => icons::files(frame, center(rect), scale, color, clip),
             SidebarView::Search => icons::search(frame, center(rect), scale, color, clip),
             SidebarView::Commit => icons::git(frame, center(rect), scale, color, clip),
+            SidebarView::Ssh => icons::ssh(frame, center(rect), scale, color, clip),
         }
         if view == SidebarView::Commit && share >= 1.0 && app.commit_count_text().is_some() {
             draw_change_dot(frame, p, rect, base, clip);

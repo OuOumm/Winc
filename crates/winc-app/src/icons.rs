@@ -659,6 +659,26 @@ pub fn git(frame: &mut Frame<'_>, center: (f32, f32), scale: f32, color: Color, 
     branch_shape(frame, center, (0.7 * scale, STROKE), color, None, clip);
 }
 
+/// 绘制侧栏「SSH 资产」视图图标，约 13×10：线条风格（笔宽 `STROKE`，与 `files`、`search`、
+/// `git` 一致），图形为一台主机圆角机箱，中央是终端提示符 `>_`，表示远程终端会话。
+///
+/// 机箱与提示符随 `scale` 一起缩放，笔宽不变；`clip` 用于视图出现/消失动画的裁剪。
+pub fn ssh(frame: &mut Frame<'_>, (cx, cy): (f32, f32), scale: f32, color: Color, clip: Rect) {
+    let k = scale;
+    let (w, h) = (13.0 * k, 10.0 * k);
+    let (x, y) = (cx - w / 2.0, cy - h / 2.0);
+    let r = 1.5 * k;
+    // 终端提示符 >_ ：尖括号两笔加一条下划线。
+    let prompt = [
+        Stroke::Line(cx - 2.75 * k, cy - 1.75 * k, cx - 0.75 * k, cy),
+        Stroke::Line(cx - 0.75 * k, cy, cx - 2.75 * k, cy + 1.75 * k),
+        Stroke::Line(cx + 0.25 * k, cy + 1.75 * k, cx + 3.0 * k, cy + 1.75 * k),
+    ];
+    // rounded_outline 8 笔 + 提示符 3 笔 = 11 笔。
+    let shapes: Strokes<11> = joined(&[&rounded_outline(x, y, w, h, r), &prompt]);
+    frame.stroke(shapes.as_slice(), STROKE, color, clip);
+}
+
 /// 分支图形：在 24×24 的设计稿坐标系上绘制，按 `unit` 缩放（实际尺寸约 18·`unit` 逻辑像素），
 /// 中心在 `(cx, cy)`，笔宽 `width`。
 ///

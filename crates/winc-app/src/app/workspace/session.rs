@@ -155,7 +155,7 @@ impl App {
         self.apply_compact_folders();
         self.folder_opened();
         self.focus = match self.panels.sidebar.view {
-            SidebarView::Files => Focus::Tree,
+            SidebarView::Files | SidebarView::Ssh => Focus::Tree,
             SidebarView::Search => Focus::GlobalQuery,
             SidebarView::Commit => self.commit_view_focus(),
         };

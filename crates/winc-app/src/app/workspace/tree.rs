@@ -314,7 +314,7 @@ impl App {
     pub(in crate::app) fn toggle_sidebar(&mut self) {
         self.set_sidebar(!self.panels.sidebar.visible);
         self.focus = match (self.panels.sidebar.visible, self.panels.sidebar.view) {
-            (true, SidebarView::Files) => Focus::Tree,
+            (true, SidebarView::Files | SidebarView::Ssh) => Focus::Tree,
             (true, SidebarView::Search) => Focus::GlobalQuery,
             (true, SidebarView::Commit) => self.commit_view_focus(),
             (false, _) if self.focus == Focus::Terminal => Focus::Terminal,

@@ -462,6 +462,10 @@ impl App {
         if view == SidebarView::Commit {
             self.git_read_summaries();
         }
+        // 进入 SSH 视图时读取一次主机列表（再次点击标签可刷新）。
+        if view == SidebarView::Ssh {
+            self.ssh_refresh();
+        }
 
         self.request_redraw();
     }

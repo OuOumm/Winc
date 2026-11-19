@@ -154,6 +154,8 @@ pub(in crate::app) enum After {
     Browse,
     /// 连接中断后自动重新连接到已打开的目录：不向用户提问，失败时改为提示并提供按钮。
     Restore,
+    /// 连接成功后进入 SSH 管理工作区（终端 + 文件 + 服务器概览），不打开目录为编辑器工作区。
+    SshWorkspace,
 }
 
 impl Reached {
@@ -200,6 +202,19 @@ pub(crate) struct RemoteState {
     /// 正在进行的连接成功、打开目录之后要打开的文件，及参数中写的目录（见
     /// [`App::open_remote`]）；没有时为 `None`。
     files: Option<(PathBuf, Vec<crate::cli::Target>)>,
+    /// SSH 资产侧栏中选中的主机下标；进入视图或列表变化时会被夹到有效范围内。
+    pub(crate) asset_selection: usize,
+    /// SSH 工作区（终端 + 文件 + 服务器概览）；没有会话时为 `None`。
+    pub(crate) ws: Option<crate::app::ssh_monitor::Workspace>,
+    /// 后台采集概览的回传槽。
+    pub(crate) monitor: Arc<Mutex<Option<crate::app::ssh_monitor::MonitorResult>>>,
+    /// 后台读取文件列表的回传槽。
+    pub(crate) ssh_files: Arc<Mutex<Option<crate::app::ssh_monitor::FilesResult>>>,
+    /// 后台文件传输的结果槽。
+    pub(crate) ssh_transfer:
+        Arc<Mutex<Option<crate::app::ssh_monitor::TransferDone>>>,
+    /// 文件栏底部显示的最近一次传输结果。
+    pub(crate) transfer_status: Option<String>,
 }
 
 impl Default for RemoteState {
@@ -219,6 +234,12 @@ impl Default for RemoteState {
             listed: picker::Listings::default(),
             watching: Arc::default(),
             files: None,
+            asset_selection: 0,
+            ws: None,
+            monitor: Arc::default(),
+            ssh_files: Arc::default(),
+            ssh_transfer: Arc::default(),
+            transfer_status: None,
         }
     }
 }
@@ -688,6 +709,477 @@ impl App {
         self.config.remote_enabled.unwrap_or(false)
     }
 
+    /// SSH 资产侧栏当前列出的主机（`~/.ssh/config` 中的 `Host`）。
+    ///
+    /// 首次进入视图时由 [`App::ssh_refresh`] 读取一次；这里只返回已记下的名字。
+    pub(crate) fn ssh_assets(&self) -> Vec<String> {
+        hosts().into_iter().map(str::to_owned).collect()
+    }
+
+    /// 重新读取 `~/.ssh/config`，并把选中项夹到有效范围。返回主机个数。
+    pub(in crate::app) fn ssh_refresh(&mut self) -> usize {
+        let count = refresh_hosts();
+        if self.remote.asset_selection >= count && count > 0 {
+            self.remote.asset_selection = count - 1;
+        }
+        if count == 0 {
+            self.remote.asset_selection = 0;
+        }
+        self.request_redraw();
+        count
+    }
+
+    /// 从 SSH 资产列表连接选中的主机，进入 SSH 管理工作区。
+    pub(crate) fn ssh_connect_selected(&mut self) {
+        let Some(host) = hosts().into_iter().nth(self.remote.asset_selection).map(str::to_owned)
+        else {
+            return;
+        };
+        self.ssh_connect_host(&host);
+    }
+
+    /// 连接主机 `host`（若已连接则沿用），完成后进入 SSH 管理工作区。
+    pub(crate) fn ssh_connect_host(&mut self, host: &str) {
+        let Some(target) = Target::new(host) else {
+            self.flash(t!("workspace-ssh-invalid-host", host = host));
+            return;
+        };
+        // 已连接：直接进入工作区，无需再走一遍连接流程。
+        if remote::is_connected(&target) {
+            let home = winc_backend::native_lossy(&winc_backend::virtual_path(&target, b"/"))
+                .into_owned();
+            self.ssh_workspace_connected(target, home);
+            return;
+        }
+        self.remote.form = None;
+        self.remote_open(target, String::new(), After::SshWorkspace);
+    }
+
+    /// 连接成功后建立会话、打开远端终端并开始采集概览。
+    pub(crate) fn ssh_workspace_connected(&mut self, target: Target, home: String) {
+        use crate::app::ssh_monitor::Session;
+
+        // 同一主机已有会话则激活它，否则新建。
+        let ws = self.remote.ws.get_or_insert_with(Default::default);
+        let existing = ws.sessions.iter().position(|s| s.target == target);
+        let active = match existing {
+            Some(i) => {
+                ws.active = i;
+                i
+            }
+            None => {
+                ws.sessions.push(Session {
+                    target: target.clone(),
+                    cwd: home.clone(),
+                    overview: Default::default(),
+                    error: None,
+                    last_collect: None,
+                    term_id: None,
+                });
+                ws.active = ws.sessions.len() - 1;
+                ws.active
+            }
+        };
+        ws.files.clear();
+        let _ = home;
+
+        // 每个会话一个专属终端：已有标签就激活它，没有就新建并记下编号。
+        self.ssh_switch_terminal(active);
+
+        // 读取初始目录并采集概览。
+        self.ssh_read_files();
+        self.ssh_collect(active);
+        self.request_redraw();
+    }
+
+    /// 切换到会话 `index` 的专属终端：已有标签则激活，没有则新建并记下编号。
+    ///
+    /// 标签按 `cwd`（该会话主机的虚拟路径根）匹配，新建的标签经 `want` 队列异步创建后即可被识别。
+    pub(crate) fn ssh_switch_terminal(&mut self, index: usize) {
+        let Some((target, home)) = self
+            .remote
+            .ws
+            .as_ref()
+            .and_then(|ws| ws.sessions.get(index))
+            .map(|s| (s.target.clone(), s.cwd.clone()))
+        else {
+            return;
+        };
+        let cwd = winc_backend::virtual_path(&target, home.as_bytes())
+            .to_string_lossy()
+            .into_owned()
+            .into_bytes();
+
+        // 已经建好的标签：按 cwd 找。
+        if let Some(term) = self
+            .terminal
+            .tabs
+            .iter()
+            .position(|t| t.cwd == cwd)
+        {
+            self.terminal.active = term;
+            let id = self.terminal.tabs[term].id;
+            if let Some(session) = self
+                .remote
+                .ws
+                .as_mut()
+                .and_then(|ws| ws.sessions.get_mut(index))
+            {
+                session.term_id = Some(id);
+            }
+            self.request_redraw();
+            return;
+        }
+
+        // 还没有：新建一个（异步进入 want 队列，建好后 cwd 即为该虚拟路径）。
+        let shell = shells(&target).first().map(|s| s.command.clone());
+        self.new_terminal_tab_with(cwd, shell);
+    }
+
+    /// 关闭 SSH 工作区（断开会话、回到普通编辑区）。
+    pub(crate) fn ssh_close_workspace(&mut self) {
+        if let Some(ws) = self.remote.ws.take() {
+            for session in ws.sessions {
+                remote::disconnect(&session.target);
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// 在后台采集当前活动主机的服务器概览。
+    pub(crate) fn ssh_collect(&mut self, index: usize) {
+        use crate::app::ssh_monitor;
+        let Some(target) = self
+            .remote
+            .ws
+            .as_ref()
+            .and_then(|ws| ws.sessions.get(index))
+            .map(|s| s.target.clone())
+        else {
+            return;
+        };
+        let slot = Arc::clone(&self.remote.monitor);
+        self.spawn_blocking_then(UserEvent::SshMonitorReady, move || {
+            let dir = winc_backend::virtual_path(&target, b"/");
+            let deadline = std::time::Instant::now() + ssh_monitor::monitor_timeout();
+            let exec = Exec::new("sh")
+                .arg("-c")
+                .arg(ssh_monitor::collect_script())
+                .limit(1 << 20);
+            let result = remote::exec(&dir, &exec, &|| std::time::Instant::now() >= deadline)
+                .map_err(|e| e.to_string())
+                .and_then(|out| {
+                    if out.code == Some(0) {
+                        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+                    } else {
+                        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+                        Err(if err.is_empty() {
+                            format!("命令退出码 {:?}", out.code)
+                        } else {
+                            err
+                        })
+                    }
+                });
+            *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some((index, result));
+        });
+    }
+
+    /// 上传本地文件 `local` 到当前会话目录。
+    pub(crate) fn ssh_upload(&mut self, local: std::path::PathBuf) {
+        let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) else {
+            return;
+        };
+        let target = session.target.clone();
+        let dir = session.cwd.clone();
+        let Some(name) = local.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return;
+        };
+        let remote = winc_backend::virtual_path(
+            &target,
+            format!("{dir}/{name}").trim_start_matches("//").as_bytes(),
+        );
+        let slot = Arc::clone(&self.remote.ssh_transfer);
+        self.spawn_blocking_then(UserEvent::SshTransferred, move || {
+            let result = winc_backend::fs::copy(&local, &remote).map_err(|e| e.to_string());
+            *slot.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some(crate::app::ssh_monitor::TransferDone {
+                    upload: true,
+                    name,
+                    result,
+                });
+        });
+    }
+
+    /// 下载当前会话目录中名为 `name` 的文件到本机下载目录。
+    pub(crate) fn ssh_download(&mut self, name: String) {
+        let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) else {
+            return;
+        };
+        let target = session.target.clone();
+        let dir = session.cwd.clone();
+        let remote = winc_backend::virtual_path(
+            &target,
+            format!("{dir}/{name}").trim_start_matches("//").as_bytes(),
+        );
+        // 下载到用户主目录下的 Downloads（不存在时用临时目录）。
+        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(std::path::PathBuf::from);
+        let base = home
+            .as_ref()
+            .map(|h| h.join("Downloads"))
+            .filter(|p| winc_backend::fs::is_dir(p))
+            .or_else(|| home.clone())
+            .unwrap_or_else(std::env::temp_dir);
+        let local = base.join(&name);
+        let slot = Arc::clone(&self.remote.ssh_transfer);
+        self.spawn_blocking_then(UserEvent::SshTransferred, move || {
+            let result = winc_backend::fs::copy(&remote, &local).map_err(|e| e.to_string());
+            *slot.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some(crate::app::ssh_monitor::TransferDone {
+                    upload: false,
+                    name,
+                    result,
+                });
+        });
+    }
+
+    /// 主线程取回传输结果：更新状态文字，上传成功后刷新文件列表。
+    pub(crate) fn poll_ssh_transfer(&mut self) {
+        use crate::app::ssh_monitor;
+        let Some(done) = ssh_monitor::take_transfer(&self.remote.ssh_transfer) else {
+            return;
+        };
+        let uploaded = done.upload && done.result.is_ok();
+        self.remote.transfer_status = Some(ssh_monitor::transfer_text(&done));
+        if uploaded {
+            self.ssh_read_files();
+        }
+        self.request_redraw();
+    }
+
+    /// 处理 SSH 工作区中的点击。
+    pub(crate) fn press_ssh_ws(&mut self, target: crate::app::ssh_monitor::SshWsTarget) {
+        use crate::app::ssh_monitor::SshWsTarget;
+        match target {
+            SshWsTarget::Asset(i) => {
+                self.remote.asset_selection = i;
+                self.ssh_connect_selected();
+            }
+            SshWsTarget::KillProc(index) => {
+                let Some((target, pid)) = self
+                    .remote
+                    .ws
+                    .as_ref()
+                    .and_then(|ws| ws.active())
+                    .and_then(|s| {
+                        s.overview
+                            .processes
+                            .get(index)
+                            .map(|p| (s.target.clone(), p.0.clone()))
+                    })
+                else {
+                    return;
+                };
+                let slot = Arc::clone(&self.remote.monitor);
+                let active = self.remote.ws.as_ref().map(|ws| ws.active).unwrap_or(0);
+                self.spawn_blocking_then(UserEvent::SshMonitorReady, move || {
+                    let dir = winc_backend::virtual_path(&target, b"/");
+                    // 先结束进程，再重新采集概览，一次回传完成刷新。
+                    let kill = Exec::new("kill").arg("-9").arg(&pid).limit(4096);
+                    let _ = remote::exec(&dir, &kill, &|| false);
+                    let deadline = std::time::Instant::now() + crate::app::ssh_monitor::monitor_timeout();
+                    let exec = Exec::new("sh")
+                        .arg("-c")
+                        .arg(crate::app::ssh_monitor::collect_script())
+                        .limit(1 << 20);
+                    let result = remote::exec(&dir, &exec, &|| std::time::Instant::now() >= deadline)
+                        .map_err(|e| e.to_string())
+                        .and_then(|out| {
+                            if out.code == Some(0) {
+                                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+                            } else {
+                                Err(String::from_utf8_lossy(&out.stderr).into_owned())
+                            }
+                        });
+                    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some((active, result));
+                });
+            }
+            SshWsTarget::Close => self.ssh_close_workspace(),
+            SshWsTarget::Session(i) => {
+                let valid = self.remote.ws.as_ref().is_some_and(|ws| i < ws.sessions.len());
+                if valid {
+                    self.remote.ws.as_mut().unwrap().active = i;
+                    // 切到该会话自己的终端。
+                    self.ssh_switch_terminal(i);
+                    self.ssh_read_files();
+                    self.ssh_collect(i);
+                    self.request_redraw();
+                }
+            }
+            SshWsTarget::Refresh => {
+                if let Some(i) = self.remote.ws.as_ref().map(|ws| ws.active) {
+                    self.ssh_read_files();
+                    self.ssh_collect(i);
+                }
+            }
+            SshWsTarget::Upload => {
+                // 选择本地文件后上传到当前目录。
+                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                    self.ssh_upload(path);
+                }
+            }
+            SshWsTarget::Download(i) => {
+                let name = self
+                    .remote
+                    .ws
+                    .as_ref()
+                    .and_then(|ws| ws.files.get(i))
+                    .map(|f| f.0.clone());
+                if let Some(name) = name {
+                    self.ssh_download(name);
+                }
+            }
+            SshWsTarget::FileUp => {
+                if let Some(session) = self.remote.ws.as_mut().and_then(|ws| ws.active_mut()) {
+                    session.cwd = if session.cwd == "/" || session.cwd.is_empty() {
+                        "/".to_owned()
+                    } else {
+                        match session.cwd.rfind('/') {
+                            Some(0) | None => "/".to_owned(),
+                            Some(i) => session.cwd[..i].to_owned(),
+                        }
+                    };
+                }
+                self.ssh_read_files();
+                self.request_redraw();
+            }
+            SshWsTarget::File(i) => {
+                // 目录：双击进入（这里单击即进入，原型交互简化）；文件：打开到编辑器。
+                let entry = self
+                    .remote
+                    .ws
+                    .as_ref()
+                    .and_then(|ws| ws.files.get(i))
+                    .cloned();
+                let Some((name, is_dir, ..)) = entry else {
+                    return;
+                };
+                if is_dir {
+                    if let Some(session) = self.remote.ws.as_mut().and_then(|ws| ws.active_mut()) {
+                        session.cwd = if session.cwd == "/" {
+                            format!("/{name}")
+                        } else {
+                            format!("{}/{name}", session.cwd)
+                        };
+                    }
+                    self.ssh_read_files();
+                    self.request_redraw();
+                } else if let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) {
+                    let path = winc_backend::virtual_path(
+                        &session.target,
+                        format!("{}/{}", session.cwd, name).as_bytes(),
+                    );
+                    self.open_path(&path);
+                }
+            }
+        }
+    }
+
+    /// 在后台读取当前目录的文件列表。
+    pub(crate) fn ssh_read_files(&mut self) {
+        use crate::app::ssh_monitor;
+        let Some(session) = self.remote.ws.as_ref().and_then(|ws| ws.active()) else {
+            return;
+        };
+        let target = session.target.clone();
+        let dir_name = session.cwd.clone();
+        let slot = Arc::clone(&self.remote.ssh_files);
+        self.spawn_blocking_then(UserEvent::SshFilesReady, move || {
+            let dir = winc_backend::virtual_path(&target, dir_name.as_bytes());
+            let deadline = std::time::Instant::now() + ssh_monitor::monitor_timeout();
+            // 用 ls 一次取回名称、权限、大小、时间；-A 不含 . 与 ..。
+            let exec = Exec::new("ls")
+                .arg("-lA")
+                .arg("--time-style=+%Y-%m-%d %H:%M")
+                .limit(1 << 20);
+            let result = remote::exec(&dir, &exec, &|| std::time::Instant::now() >= deadline)
+                .map_err(|e| e.to_string())
+                .and_then(|out| {
+                    if out.code != Some(0) {
+                        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+                        return Err(if err.is_empty() { "ls 失败".to_owned() } else { err });
+                    }
+                    let mut entries = Vec::new();
+                    for line in String::from_utf8_lossy(&out.stdout).lines() {
+                        let cols: Vec<&str> = line.split_whitespace().collect();
+                        // -rw-r--r-- 1 root root 4096 2024-03-23 15:09 name
+                        if cols.len() < 6 {
+                            continue;
+                        }
+                        let perm = cols[0].to_owned();
+                        let is_dir = perm.starts_with('d');
+                        let size = cols[4].to_owned();
+                        // 时间是倒数第 3、2 列，名字是最后一列（可能含空格）。
+                        let time = format!("{} {}", cols[cols.len() - 3], cols[cols.len() - 2]);
+                        let name = cols[cols.len() - 1].to_owned();
+                        entries.push((name, is_dir, size, time, perm));
+                    }
+                    entries.sort_by(|a, b| {
+                        (b.1, a.0.to_lowercase()).cmp(&(a.1, b.0.to_lowercase()))
+                    });
+                    Ok(entries)
+                });
+            *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+        });
+    }
+
+    /// 主线程取回文件列表。
+    pub(crate) fn poll_ssh_files(&mut self) {
+        use crate::app::ssh_monitor;
+        let Some(result) = ssh_monitor::take_files(&self.remote.ssh_files) else {
+            return;
+        };
+        if let Some(ws) = self.remote.ws.as_mut() {
+            match result {
+                Ok(files) => {
+                    ws.files = files;
+                    ws.file_error = None;
+                }
+                Err(error) => {
+                    ws.files.clear();
+                    ws.file_error = Some(error);
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// 主线程取回采集结果，解析成概览。
+    pub(crate) fn poll_ssh_monitor(&mut self) {
+        use crate::app::ssh_monitor;
+        let Some((index, result)) = ssh_monitor::take_monitor(&self.remote.monitor) else {
+            return;
+        };
+        if let Some(session) = self
+            .remote
+            .ws
+            .as_mut()
+            .and_then(|ws| ws.sessions.get_mut(index))
+        {
+            match result {
+                Ok(text) => {
+                    // 沿用上一份概览中的网络累计字节，使速率能差分计算。
+                    session.overview =
+                        ssh_monitor::parse_overview_with(&text, Some(&session.overview));
+                    session.error = None;
+                    session.last_collect = Some(std::time::Instant::now());
+                }
+                Err(error) => session.error = Some(error),
+            }
+        }
+        self.request_redraw();
+    }
+
     /// 连接主机 `host`（项目名菜单中列出的主机），连接后在面板中浏览其上的目录。
     pub(in crate::app) fn browse_remote_host(&mut self, host: &str) {
         self.open_connect_dialog(host, "", true);
@@ -909,7 +1401,9 @@ impl App {
             let host = target.as_str();
             let message = match after {
                 After::Restore => t!("workspace-remote-reconnecting", host = host),
-                After::Open | After::Browse => t!("workspace-remote-connecting", host = host),
+                After::Open | After::Browse | After::SshWorkspace => {
+                    t!("workspace-remote-connecting", host = host)
+                }
             };
             self.notify_pinned(message, NoticeAction::CancelConnect);
         }
@@ -1044,6 +1538,12 @@ impl App {
                 }
                 let home = winc_backend::native_lossy(&folder).into_owned();
                 self.open_remote_browser(target, home);
+            }
+            Ok(reached) if self.remote_enabled() && self.remote.after == After::SshWorkspace => {
+                // 连接成功：进入 SSH 管理工作区。
+                let folder = reached.into_folder();
+                let home = winc_backend::native_lossy(&folder).into_owned();
+                self.ssh_workspace_connected(target, home);
             }
             Ok(reached) if self.remote_enabled() => {
                 let folder = reached.into_folder();

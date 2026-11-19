@@ -198,6 +198,7 @@ impl App {
         }
 
         match self.target_at(x, y) {
+            Target::SshWs(t) => Hover::SshWs(t),
             Target::WindowControl(control) => Hover::WindowControl(control),
             Target::ResizeEdge(direction) => Hover::ResizeEdge(direction),
             Target::NoticeButton => Hover::NoticeButton,
@@ -426,6 +427,10 @@ impl App {
         }
         if let Some(index) = self.pane_divider_at(x, y) {
             return Target::PaneDivider(index);
+        }
+        // SSH 工作区与侧栏资产列表中的按钮先于普通编辑区判断。
+        if let Some(t) = hit(&self.hits.ssh_ws, x, y) {
+            return Target::SshWs(t);
         }
         if let Some(hit) = hit(&self.hits.terminal, x, y) {
             return Target::TerminalHeader(hit);
@@ -957,6 +962,8 @@ pub(super) enum Target {
     NewTab,
     /// 标签栏无法容纳全部标签时显示在最右端的「⌄」。
     TabList,
+    /// SSH 工作区中的可点击区域。
+    SshWs(crate::app::ssh_monitor::SshWsTarget),
     /// 标签栏右端「源代码 / 分栏 / 预览」三段切换中的一段。
     Preview(winc_editor::PreviewMode),
     /// 标签栏右端「在浏览器中打开」。
