@@ -794,14 +794,15 @@ impl App {
 
     /// 切换到会话 `index` 的专属终端：已有标签则激活，没有则新建并记下编号。
     ///
-    /// 标签按 `cwd`（该会话主机的虚拟路径根）匹配，新建的标签经 `want` 队列异步创建后即可被识别。
+    /// 先按会话记下的 `term_id` 查找；`term_id` 还没有时按 `cwd`（该会话主机虚拟路径根）
+    /// 认领一次。标签的 `cwd` 会被 shell 的 OSC 7 改写，因此只作为初次认领的手段。
     pub(crate) fn ssh_switch_terminal(&mut self, index: usize) {
-        let Some((target, home)) = self
+        let Some((target, home, known_id)) = self
             .remote
             .ws
             .as_ref()
             .and_then(|ws| ws.sessions.get(index))
-            .map(|s| (s.target.clone(), s.cwd.clone()))
+            .map(|s| (s.target.clone(), s.cwd.clone(), s.term_id))
         else {
             return;
         };
@@ -810,13 +811,11 @@ impl App {
             .into_owned()
             .into_bytes();
 
-        // 已经建好的标签：按 cwd 找。
-        if let Some(term) = self
-            .terminal
-            .tabs
-            .iter()
-            .position(|t| t.cwd == cwd)
-        {
+        // 1) 已有标签：优先按记下的 id，其次按 cwd 认领一次。
+        let found = known_id
+            .and_then(|id| self.terminal.tabs.iter().position(|t| t.panes().any(|p| p.id == id)))
+            .or_else(|| self.terminal.tabs.iter().position(|t| t.cwd == cwd));
+        if let Some(term) = found {
             self.terminal.active = term;
             let id = self.terminal.tabs[term].id;
             if let Some(session) = self
@@ -833,6 +832,8 @@ impl App {
 
         // 还没有：新建一个（异步进入 want 队列，建好后 cwd 即为该虚拟路径）。
         let shell = shells(&target).first().map(|s| s.command.clone());
+        // 清掉拆分目标，避免这个终端被并进别的标签。
+        self.terminal.split_into = None;
         self.new_terminal_tab_with(cwd, shell);
     }
 
