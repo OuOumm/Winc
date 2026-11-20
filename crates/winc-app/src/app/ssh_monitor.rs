@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use winc_backend::Target;
 use winc_render::Rect;
 
-/// SSH 工作区三栏布局：左栏终端、右上文件、右下概览。
+/// SSH 工作区三栏布局：左栏终端、中栏文件、右栏概览。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Parts {
     /// 终端栏（交给全局终端面板绘制）。
@@ -25,19 +25,29 @@ pub(crate) struct Parts {
 }
 
 impl Parts {
-    /// 从编辑区矩形切出三栏：终端 44%，右侧 56% 上下分为文件与概览。
+    /// 从编辑区矩形切出三栏：终端 40%、文件 38%、概览剩余宽度。
+    ///
+    /// 概览有最小宽度，窗口不够时先压缩文件栏。
     pub(crate) fn new(editor: Rect) -> Self {
         let gap = 8.0_f32;
         let tabs_h = 32.0_f32;
-        let body = Rect::new(editor.x, editor.y + tabs_h, editor.w, (editor.h - tabs_h).max(0.0));
-        let term_w = (body.w * 0.44).round().max(0.0);
-        let right_x = body.x + term_w + gap;
-        let right_w = (body.right() - right_x).max(0.0);
-        let files_h = (body.h * 0.55).round().max(0.0);
+        let body = Rect::new(
+            editor.x,
+            editor.y + tabs_h,
+            editor.w,
+            (editor.h - tabs_h).max(0.0),
+        );
+        // 概览固定宽度，最多占 30%：窄窗口下不至于把终端挤没。
+        let overview_w = (editor.w * 0.30).clamp(220.0, 360.0).min((body.w * 0.5).max(0.0));
+        let usable = (body.w - overview_w - gap * 2.0).max(0.0);
+        let term_w = (usable * 0.52).round();
+        let files_w = (usable - term_w).max(0.0);
+        let files_x = body.x + term_w + gap;
+        let overview_x = files_x + files_w + gap;
         Self {
-            terminal: Rect::new(body.x, body.y, term_w.max(0.0), body.h),
-            files: Rect::new(right_x, body.y, right_w, files_h),
-            overview: Rect::new(right_x, body.y + files_h + gap, right_w, (body.bottom() - body.y - files_h - gap).max(0.0)),
+            terminal: Rect::new(body.x, body.y, term_w, body.h),
+            files: Rect::new(files_x, body.y, files_w, body.h),
+            overview: Rect::new(overview_x, body.y, overview_w, body.h),
             tabs: Rect::new(editor.x, editor.y, editor.w, tabs_h),
         }
     }
@@ -104,6 +114,8 @@ pub(crate) struct Workspace {
     pub(crate) file_error: Option<String>,
     /// 进程过滤关键字。
     pub(crate) proc_filter: String,
+    /// 概览内容的滚动偏移（逻辑像素）。
+    pub(crate) overview_scroll: f32,
 }
 
 impl Workspace {

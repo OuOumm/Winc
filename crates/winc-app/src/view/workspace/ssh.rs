@@ -10,7 +10,8 @@ use super::*;
 use super::sidebar::ContextBar;
 
 /// 资产列表一行的高度（逻辑像素），与提交列表行高一致。
-const ROW: f32 = 24.0;
+/// 资产行高（两行：名称、地址）。
+const ROW: f32 = 38.0;
 /// 列表两列的左右内边距（逻辑像素）。
 const PAD: f32 = 12.0;
 
@@ -103,19 +104,19 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
             frame.rect_clipped(row, p.selection, crate::theme::RADIUS_ROW, list_clip);
         }
         // 状态点：能连的主机统一用强调色（真实连通性在连接时确认）。
-        let dot = Rect::new(row.x + PAD - 6.0, row.y + (ROW - 6.0) / 2.0, 6.0, 6.0);
+        let dot = Rect::new(row.x + PAD - 6.0, row.y + 16.0, 6.0, 6.0);
         frame.rect_clipped(dot, p.accent, 3.0, list_clip);
-        ui_text(
-            frame,
-            app,
-            row.x + PAD + 8.0,
-            row,
-            host,
-            if selected { p.text } else { p.text_muted },
-            list_clip,
-        );
+        // 第一行主机名，第二行地址。
+        let name_row = Rect::new(row.x, row.y, row.w, 19.0);
+        ui_text(frame, app, row.x + PAD + 8.0, name_row, host, p.text, list_clip);
+        if let Some((user, addr, port)) = crate::app::remote::host_endpoint(host) {
+            let at = user.map(|u| format!("{u}@")).unwrap_or_default();
+            let p2 = port.map(|x| format!(":{x}")).unwrap_or_default();
+            let addr_row = Rect::new(row.x, row.y + 18.0, row.w, 17.0);
+            ui_text_small(frame, app, row.x + PAD + 8.0, addr_row, &format!("{at}{addr}{p2}"), p.text_dim, list_clip);
+        }
         // 行尾的移除按钮：从 ssh 配置里删掉这台主机。
-        let remove = Rect::new(row.right() - 18.0, row.y + 4.0, 14.0, ROW - 8.0);
+        let remove = Rect::new(row.right() - 18.0, row.y + 12.0, 14.0, 15.0);
         ui_text_small(frame, app, remove.x, remove, "✕", p.text_dim, list_clip);
         app.hits
             .ssh_ws

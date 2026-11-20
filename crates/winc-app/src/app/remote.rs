@@ -864,6 +864,49 @@ fn read_remote_dir(dir: &std::path::Path) -> Result<Vec<crate::app::ssh_monitor:
     Ok(entries)
 }
 
+/// 从 `~/.ssh/config` 查出主机 `host` 的连接信息：(用户, 地址, 端口)。
+///
+/// 用于资产列表的地址副行。`HostName` 缺省时用别名本身；用户和端口读不到时为 `None`。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "只访问本机：用户主目录中的 ssh 配置"
+)]
+pub(crate) fn host_endpoint(host: &str) -> Option<(Option<String>, String, Option<u16>)> {
+    let text = std::fs::read_to_string(ssh_config()?).ok()?;
+    let mut user = None;
+    let mut addr = host.to_owned();
+    let mut port = None;
+    let mut matched = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed
+            .strip_prefix("Host ")
+            .or_else(|| trimmed.strip_prefix("host "))
+        {
+            // 命中目标主机的那一段才开始收集；遇到下一段停止。
+            if matched {
+                break;
+            }
+            matched = rest.split_whitespace().any(|n| n == host);
+            continue;
+        }
+        if !matched {
+            continue;
+        }
+        let (key, value) = match trimmed.split_once(char::is_whitespace) {
+            Some(pair) => (pair.0.to_lowercase(), pair.1.trim()),
+            None => continue,
+        };
+        match key.as_str() {
+            "hostname" if !value.is_empty() => addr = value.to_owned(),
+            "user" if !value.is_empty() => user = Some(value.to_owned()),
+            "port" => port = value.parse::<u16>().ok(),
+            _ => {}
+        }
+    }
+    Some((user, addr, port))
+}
+
 /// 本机下载目录：用户主目录下的 `Downloads`，没有时回退主目录或临时目录。
 fn download_dir() -> std::path::PathBuf {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -972,6 +1015,8 @@ impl App {
 
         // 每个会话一个专属终端：已有标签就激活它，没有就新建并记下编号。
         self.ssh_switch_terminal(active);
+        // 焦点放进终端：连上之后直接可以敲命令、回答密码提示。
+        self.focus = crate::app::Focus::Terminal;
 
         // 读取初始目录并采集概览。
         self.ssh_read_files();

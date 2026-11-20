@@ -106,6 +106,20 @@ impl App {
         };
         // 在前台以外的窗格上滚动：滚动或缩放那个窗格，前台不变。
         let (x, y) = self.pointer.mouse;
+        // SSH 工作区的概览栏：滚动概览内容。
+        if let Some(parts) = self.hits.ssh_ws_parts
+            && parts.overview.contains(x, y)
+        {
+            let step = match delta {
+                MouseScrollDelta::LineDelta(_, dy) => dy * 40.0,
+                MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+            };
+            if let Some(ws) = self.remote.ws.as_mut() {
+                ws.overview_scroll = (ws.overview_scroll - step).max(0.0);
+            }
+            self.request_redraw();
+            return;
+        }
         if let Some(pane) = self.background_pane_at(x, y) {
             self.with_pane(pane, wheel);
             self.refresh_pointer_hover();
