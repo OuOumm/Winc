@@ -445,6 +445,10 @@ impl App {
             let password = dialog.second.text().replace(['\r', '\n'], "");
             self.git.branch.password = Some((server.clone(), password));
         }
+        // SSH 登录口令：记在这个连接目标上，下次连接直接使用。
+        // 借用在下面的 reply 之前结束，先取出目标与口令。
+        let remember_password = matches!(prompt, Prompt::SshPassword { .. })
+            .then(|| (self.remote.connecting.clone(), answer.clone()));
         if let Some(flag) = self.git.branch.remember.take() {
             flag.store(dialog.checkout, std::sync::atomic::Ordering::Relaxed);
         }
@@ -453,6 +457,9 @@ impl App {
             asker
         });
         self.close_form_dialog();
+        if let Some((Some(target), password)) = remember_password {
+            self.update_state(|state| state.set_remote_password(target.as_str(), &password));
+        }
         // 答复的是连接远端主机时的询问：连接仍在进行，回到连接的对话框。
         if asker == Some(Asker::Remote) {
             self.restore_connect_dialog();

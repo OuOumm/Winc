@@ -107,14 +107,24 @@ impl App {
                 self.drag_diff_select(x, y, unit, origin, add);
             }
             Drag::DiffColumns { anchor } => self.drag_diff_columns(x, y, anchor),
-            Drag::DiffSelectRead { side, unit, origin } => {
+            Drag::SshSideDivider {
+                start_x,
+                start_width,
+            } => {
+                // 往左拖变宽：右侧栏的宽度是「总宽 - 鼠标位置」。
+                if let Some(ws) = self.remote.ws.as_mut() {
+                    ws.side_width = (start_width - (x - start_x))
+                        .clamp(crate::app::ssh_monitor::SIDE_MIN, crate::app::ssh_monitor::SIDE_MAX);
+                }
+                self.relayout();
+                self.request_redraw();
+            }            Drag::DiffSelectRead { side, unit, origin } => {
                 self.drag_diff_select_read(x, y, side, unit, origin);
             }
             Drag::Splitter {
                 start_x,
                 start_width,
-            } => {
-                // 宽度拖到最小宽度的一半以下时收起侧栏，拖回该阈值以上时重新打开。
+            } => {                // 宽度拖到最小宽度的一半以下时收起侧栏，拖回该阈值以上时重新打开。
                 // 收起时宽度恢复为拖动前的值，之后用 `⌘B` 打开时仍为拖动前的宽度。
                 let width = start_width + x - start_x;
                 if width < MIN_PANEL_WIDTH / 2.0 {

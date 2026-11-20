@@ -22,7 +22,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         return;
     };
     let p = app.palette;
-    let parts = Parts::new(app.layout.editor);
+    let parts = Parts::new(app.layout.editor, ws.side_width, ws.overview_share());
 
     // 终端还没建好（辅助进程握手期间）时，在终端栏位置给出提示；
     // 建好后由全局终端面板在同一矩形里绘制。
@@ -47,6 +47,14 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     draw_overview(app, frame, parts.overview, &ws);
 
     // 记录命中区域，供点击处理。
+    // 右侧栏与终端之间的分隔条：按下的位置由命中处理换算成拖动的宽度。
+    let hovered = app.pointer.hover == crate::app::Hover::SshSideDivider;
+    frame.rect_clipped(
+        parts.side_divider.inset(1.5, 0.0),
+        if hovered { p.accent } else { p.hover },
+        0.0,
+        parts.side_divider,
+    );
     app.hits.ssh_ws_parts = Some(parts);
 }
 
@@ -190,10 +198,25 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
     // 内容整体按滚动偏移上移；标题行固定在顶部不滚。
     let scroll = ws.overview_scroll;
     let title_h = 22.0;
-    // 标题行：主机 + 在线状态。
+    // 标题行：主机 + 在线状态 + 折叠按钮。
     let live = if ov.updated.is_some() { "● " } else { "○ " };
     let title = format!("{}{} — {}", live, t!("workspace-ssh-overview"), session.target.host());
     ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, rect.y + PAD, rect.w, 18.0), &title, p.text, clip);
+    let toggle = Rect::new(rect.right() - 22.0, rect.y + 2.0, 18.0, 18.0);
+    ui_text_small(
+        frame,
+        app,
+        toggle.x + 3.0,
+        toggle,
+        if ws.overview_open { "▾" } else { "▸" },
+        p.text_muted,
+        clip,
+    );
+    app.hits.ssh_ws.push((toggle, SshWsTarget::ToggleOverview));
+    // 收起时只留标题条。
+    if !ws.overview_open {
+        return;
+    }
     let mut y = rect.y + PAD + title_h - scroll;
 
     if let Some(err) = &session.error {

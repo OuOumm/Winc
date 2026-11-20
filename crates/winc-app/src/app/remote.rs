@@ -173,7 +173,7 @@ type Outcome = Result<Reached, String>;
 /// 远程模块的状态。
 pub(crate) struct RemoteState {
     /// 正在连接的主机；没有连接在进行时为 `None`。
-    connecting: Option<Target>,
+    pub(crate) connecting: Option<Target>,
     /// 后台连接的结果，由 [`App::poll_remote`] 取走。
     outcome: Arc<Mutex<Option<Outcome>>>,
     /// `ssh` 的输入请求。
@@ -928,7 +928,15 @@ impl App {
     ///
     /// 首次进入视图时由 [`App::ssh_refresh`] 读取一次；这里只返回已记下的名字。
     pub(crate) fn ssh_assets(&self) -> Vec<String> {
-        hosts().into_iter().map(str::to_owned).collect()
+        let mut list: Vec<String> = hosts().into_iter().map(str::to_owned).collect();
+        // 本次连过、但配置里还没有的主机也列出来，避免用户手动连上后列表里找不到。
+        for session in self.remote.ws.as_ref().map(|w| w.sessions.as_slice()).unwrap_or(&[]) {
+            let name = session.target.as_str();
+            if !list.iter().any(|h| h == name) {
+                list.push(name.to_owned());
+            }
+        }
+        list
     }
 
     /// 重新读取 `~/.ssh/config`，并把选中项夹到有效范围。返回主机个数。
@@ -1311,6 +1319,13 @@ impl App {
                 // 聚焦进程过滤框：之后键入的字符进入过滤关键字。
                 self.remote.proc_editing = true;
                 self.remote.asset_editing = false;
+                self.request_redraw();
+            }
+            SshWsTarget::ToggleOverview => {
+                if let Some(ws) = self.remote.ws.as_mut() {
+                    ws.overview_open = !ws.overview_open;
+                }
+                self.relayout();
                 self.request_redraw();
             }
             SshWsTarget::Close => self.ssh_close_workspace(),
@@ -1882,9 +1897,19 @@ impl App {
     /// 处理 `ssh` 送达的输入请求；没有连接在进行时丢弃，askpass 程序按取消处理。
     pub(in crate::app) fn poll_remote_questions(&mut self) {
         while let Ok(question) = self.remote.questions.1.try_recv() {
-            if self.remote.connecting.is_some() {
-                self.open_question(Asker::Remote, question);
+            if self.remote.connecting.is_none() {
+                continue;
             }
+            // 是口令询问、且为这台主机记过口令：直接答，不再弹对话框。
+            if question.is_password()
+                && let Some(target) = self.remote.connecting.clone()
+                && let Some(saved) = self.state.remote_password(target.as_str())
+            {
+                let saved = saved.to_owned();
+                question.reply(saved);
+                continue;
+            }
+            self.open_question(Asker::Remote, question);
         }
     }
 

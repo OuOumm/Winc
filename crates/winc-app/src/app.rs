@@ -535,6 +535,8 @@ pub enum Hover {
     ViewTab(SidebarView),
     /// SSH 工作区或资产列表中的按钮。
     SshWs(crate::app::ssh_monitor::SshWsTarget),
+    /// SSH 工作区右侧栏的分隔条。
+    SshSideDivider,
     /// 搜索面板中的按钮。
     Panel(PanelButton),
     /// 搜索结果的行序号。
@@ -684,6 +686,11 @@ enum Drag {
         origin: usize,
     },
     Splitter {
+        start_x: f32,
+        start_width: f32,
+    },
+    /// 拖动 SSH 工作区右侧栏的分隔条。
+    SshSideDivider {
         start_x: f32,
         start_width: f32,
     },

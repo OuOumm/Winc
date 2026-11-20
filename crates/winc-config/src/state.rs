@@ -123,6 +123,10 @@ pub struct State {
     ///
     /// 只记路径，不读取也不保存密钥的内容；路径原样交给 `ssh`。
     remote_keys: Vec<(String, String)>,
+    /// 用户为远端主机记住的登录口令：（连接目标的文字，口令）。
+    ///
+    /// 明文保存，经 `SSH_ASKPASS` 交给 `ssh`，省去每次连接都要重输。
+    remote_passwords: Vec<(String, String)>,
     /// Vim 模式的大写标记：名字、文件路径、行号与列号（都从 0 起），按名字排序。
     pub vim_marks: Vec<(char, PathBuf, usize, usize)>,
     /// Vim 模式命令行的历史，从旧到新，最多 `MAX_VIM_HISTORY` 条。
@@ -498,6 +502,17 @@ impl State {
             })
             .unwrap_or_default();
 
+        let remote_passwords = root
+            .get("remotePasswords")
+            .and_then(Json::as_object)
+            .map(|items| {
+                (items.iter())
+                    .filter_map(|(target, pass)| Some((target.clone(), pass.as_str()?.to_owned())))
+                    .filter(|(_, pass)| !pass.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let vim_marks = vim_marks(root);
         let vim_commands = vim_history(root, "vimCommands");
         let vim_searches = vim_history(root, "vimSearches");
@@ -509,6 +524,7 @@ impl State {
             tool_choices,
             trusted_repos,
             remote_keys,
+            remote_passwords,
             vim_marks,
             vim_commands,
             vim_searches,
@@ -839,6 +855,11 @@ impl State {
                 .map(|(target, key)| (target.clone(), Json::String(key.clone())));
             fields.push(("remoteKeys", Json::object(keys)));
         }
+        if !self.remote_passwords.is_empty() {
+            let passes = (self.remote_passwords.iter())
+                .map(|(target, pass)| (target.clone(), Json::String(pass.clone())));
+            fields.push(("remotePasswords", Json::object(passes)));
+        }
         if !self.tool_choices.is_empty() {
             let choices = self.tool_choices.iter().map(|(folder, run)| {
                 Json::object(vec![("folder", path(folder)), ("run", Json::Bool(*run))])
@@ -949,6 +970,23 @@ impl State {
         if !key.is_empty() {
             self.remote_keys.push((target.to_owned(), key.to_owned()));
             self.remote_keys.sort();
+        }
+    }
+
+    /// 返回为连接目标 `target` 记住的口令。
+    pub fn remote_password(&self, target: &str) -> Option<&str> {
+        (self.remote_passwords.iter())
+            .find(|(known, _)| known == target)
+            .map(|(_, pass)| pass.as_str())
+    }
+
+    /// 记下连接目标 `target` 的口令 `password`；为空时去掉这条记录。
+    pub fn set_remote_password(&mut self, target: &str, password: &str) {
+        self.remote_passwords.retain(|(known, _)| known != target);
+        if !password.is_empty() {
+            self.remote_passwords
+                .push((target.to_owned(), password.to_owned()));
+            self.remote_passwords.sort();
         }
     }
 

@@ -40,6 +40,8 @@ fn sample() -> State {
             PathBuf::from("/a/项目/main.rs"),
             PathBuf::from("/c/笔记.md"),
         ],
+        remote_keys: vec![("example.com".into(), "~/.ssh/id_ed25519".into())],
+        remote_passwords: vec![("example.com".into(), "secret".into())],
         sessions: vec![
             Session {
                 folder: PathBuf::from("/a/项目"),
@@ -151,7 +153,6 @@ fn sample() -> State {
         badges: Vec::new(),
         tool_choices: vec![(PathBuf::from("/a/项目"), true)],
         trusted_repos: vec![(PathBuf::from("/a/项目"), u64::MAX - 1)],
-        remote_keys: Vec::new(),
     };
     state.set_remote_key("me@devbox:2200", "~/.ssh/工作 key");
     state.set_remote_key("build", "/keys/build");

@@ -544,10 +544,14 @@ impl App {
             );
             l.terminal_divider = Rect::default();
         }
-        // SSH 工作区：终端面板占据工作区左栏，文件与概览由工作区视图绘制在右侧。
+        // SSH 工作区：终端面板占据主体，右侧栏由工作区视图绘制。
         // 放在最大化处理之后，确保 SSH 布局不被覆盖。
-        if self.remote.ws.is_some() {
-            let parts = crate::app::ssh_monitor::Parts::new(l.editor);
+        if let Some(ws) = self.remote.ws.as_ref() {
+            let parts = crate::app::ssh_monitor::Parts::new(
+                l.editor,
+                ws.side_width,
+                ws.overview_share(),
+            );
             l.terminal = parts.terminal;
             l.terminal_divider = Rect::default();
         }

@@ -199,6 +199,7 @@ impl App {
 
         match self.target_at(x, y) {
             Target::SshWs(t) => Hover::SshWs(t),
+            Target::SshSideDivider => Hover::SshSideDivider,
             Target::WindowControl(control) => Hover::WindowControl(control),
             Target::ResizeEdge(direction) => Hover::ResizeEdge(direction),
             Target::NoticeButton => Hover::NoticeButton,
@@ -345,6 +346,12 @@ impl App {
         // 资产行的点击会被面板吞掉并落到下方的文件树逻辑上（表现为点一下穿透到文件列表）。
         if let Some(t) = hit(&self.hits.ssh_ws, x, y) {
             return Target::SshWs(t);
+        }
+        // 右侧栏分隔条紧贴栏边，先于侧栏拦截判断。
+        if let Some(parts) = self.hits.ssh_ws_parts
+            && parts.side_divider.contains(x, y)
+        {
+            return Target::SshSideDivider;
         }
         // SSH 视图的侧栏区域整体拦截：它没有文件树，点击不该落到下方的文件树逻辑上。
         if self.panels.sidebar.visible
@@ -976,6 +983,8 @@ pub(super) enum Target {
     TabList,
     /// SSH 工作区中的可点击区域。
     SshWs(crate::app::ssh_monitor::SshWsTarget),
+    /// SSH 工作区右侧栏的分隔条。
+    SshSideDivider,
     /// 标签栏右端「源代码 / 分栏 / 预览」三段切换中的一段。
     Preview(winc_editor::PreviewMode),
     /// 标签栏右端「在浏览器中打开」。

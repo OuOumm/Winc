@@ -207,6 +207,18 @@ pub struct Question {
 /// 确认主机密钥时写给 `ssh` 的答复。
 pub const CONFIRMED: &str = "yes";
 
+impl Question {
+    /// 是否在询问登录口令（可自动用记住的口令回答）。
+    pub fn is_password(&self) -> bool {
+        matches!(self.prompt, Prompt::SshPassword { .. })
+    }
+
+    /// 直接把 `answer` 作为答复发回去。
+    pub fn reply(&self, answer: String) {
+        let _ = self.reply.send(answer);
+    }
+}
+
 /// 进程作为 askpass 程序或凭据助手启动时转发请求并返回退出码；普通启动时返回 `None`。
 ///
 /// 环境变量只在 Git 操作的命令上设置，但钩子会继承该变量，因此同时要求参数的形式相符：恰好一个

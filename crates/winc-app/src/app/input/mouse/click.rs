@@ -224,8 +224,14 @@ impl App {
                     start_width: self.panels.sidebar.width.min(most),
                 };
             }
-            Target::TreeTool(tool) => self.run_tree_tool(tool),
-            Target::TreeMore => self.open_tree_tools_menu(),
+            Target::SshSideDivider => {
+                let width = self.remote.ws.as_ref().map(|w| w.side_width).unwrap_or(0.0);
+                self.pointer.drag = Drag::SshSideDivider {
+                    start_x: x,
+                    start_width: width,
+                };
+            }
+            Target::TreeTool(tool) => self.run_tree_tool(tool),            Target::TreeMore => self.open_tree_tools_menu(),
             Target::ProjectName => self.open_project_menu(),
             Target::SidebarButton => self.toggle_sidebar(),
             Target::NewTab => self.new_file(),
