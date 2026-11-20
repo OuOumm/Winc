@@ -449,6 +449,8 @@ impl App {
             UserEvent::RemoteQuestion => self.poll_remote_questions(),
             UserEvent::RemoteStage => self.remote_stage_changed(),
             UserEvent::RemoteHealth => {
+                // 终端 ssh 的询问经由静态队列转来，借这个周期事件处理。
+                self.poll_terminal_questions();
                 // 借连接保活的周期事件刷新 SSH 概览（距上次超过 15 秒时）。
                 let due = self.remote.ws.as_ref().and_then(|ws| ws.active()).and_then(|s| {
                     s.last_collect.map(|t| t.elapsed() >= std::time::Duration::from_secs(15))

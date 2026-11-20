@@ -11,33 +11,37 @@ use std::time::{Duration, Instant};
 use winc_backend::Target;
 use winc_render::Rect;
 
-/// SSH 工作区布局：终端占主体，右侧一条窄栏上下排「文件」与「概览」。
+/// SSH 工作区布局：资产在侧栏，编辑区内并排「终端 | 文件 | 服务器概览」。
 ///
-/// 与 `HexHub` 一致：右侧栏宽 340 上下，概览折叠时只占一条，展开后与文件平分。
+/// 与 `HexHub` 一致：终端、文件、概览各占一栏，栏间各有一条可拖动的分隔条。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Parts {
     /// 终端栏（交给全局终端面板绘制）。
     pub(crate) terminal: Rect,
-    /// 文件列表栏（右侧栏上半）。
+    /// 文件列表栏。
     pub(crate) files: Rect,
-    /// 服务器概览栏（右侧栏下半）。
+    /// 服务器概览栏。
     pub(crate) overview: Rect,
     /// 会话标签栏。
     pub(crate) tabs: Rect,
-    /// 右侧栏分隔条（拖动改宽度）。
+    /// 终端与文件之间的分隔条。
+    pub(crate) divider: Rect,
+    /// 文件与概览之间的分隔条。
     pub(crate) side_divider: Rect,
 }
 
-/// 右侧栏的宽度范围（逻辑像素）。
-pub(crate) const SIDE_MIN: f32 = 260.0;
+/// 概览栏的宽度范围（逻辑像素）。
+pub(crate) const SIDE_MIN: f32 = 300.0;
 pub(crate) const SIDE_MAX: f32 = 560.0;
-/// 默认右侧栏宽度。
-pub(crate) const SIDE_DEFAULT: f32 = 340.0;
+/// 默认概览栏宽度。
+pub(crate) const SIDE_DEFAULT: f32 = 330.0;
 
 impl Parts {
-    /// 从编辑区矩形切出各栏；`side_w` 是右侧栏宽度，`overview_share` 是概览在右栏中的高度占比。
-    pub(crate) fn new(editor: Rect, side_w: f32, overview_share: f32) -> Self {
-        let gap = 8.0_f32;
+    /// 从编辑区矩形切出各栏：终端占剩余宽度，文件栏与概览栏各用保存的宽度。
+    ///
+    /// `files_w`、`overview_w` 由用户拖动分隔条决定；窗口变窄时先压缩文件栏。
+    pub(crate) fn new(editor: Rect, files_w: f32, overview_w: f32) -> Self {
+        let gap = 9.0_f32;
         let tabs_h = 32.0_f32;
         let body = Rect::new(
             editor.x,
@@ -45,26 +49,19 @@ impl Parts {
             editor.w,
             (editor.h - tabs_h).max(0.0),
         );
-        // 右侧栏宽度不能超过可用宽度的一半。
-        let side = side_w
-            .clamp(SIDE_MIN, SIDE_MAX)
-            .min((body.w * 0.55).max(SIDE_MIN))
-            .max(0.0);
-        let term_w = (body.w - side - gap).max(0.0);
-        let side_x = body.x + term_w + gap;
-        let share = overview_share.clamp(0.0, 1.0);
-        let overview_h = (body.h * share).round();
+        // 概览有下限与上限；文件栏随剩余空间收缩，至少留 180。
+        let overview = overview_w.clamp(SIDE_MIN, SIDE_MAX).min((body.w * 0.4).max(0.0));
+        let files = files_w.clamp(180.0, 520.0).min((body.w - overview - gap * 2.0).max(0.0));
+        let term_w = (body.w - overview - files - gap * 2.0).max(0.0);
+        let files_x = body.x + term_w + gap;
+        let overview_x = files_x + files + gap;
         Self {
             terminal: Rect::new(body.x, body.y, term_w, body.h),
-            files: Rect::new(side_x, body.y, side, (body.h - overview_h - if overview_h > 0.0 { gap } else { 0.0 }).max(0.0)),
-            overview: Rect::new(
-                side_x,
-                body.y + (body.h - overview_h),
-                side,
-                overview_h,
-            ),
+            files: Rect::new(files_x, body.y, files, body.h),
+            overview: Rect::new(overview_x, body.y, overview, body.h),
             tabs: Rect::new(editor.x, editor.y, editor.w, tabs_h),
-            side_divider: Rect::new(term_w + body.x + gap / 2.0 - 2.0, body.y, 4.0, body.h),
+            divider: Rect::new(files_x - gap, body.y, gap, body.h),
+            side_divider: Rect::new(overview_x - gap, body.y, gap, body.h),
         }
     }
 }
@@ -100,8 +97,6 @@ pub(crate) enum SshWsTarget {
     ProcFilter,
     /// 聚焦资产搜索框。
     AssetSearch,
-    /// 折叠/展开服务器概览。
-    ToggleOverview,
 }
 
 /// 一个 SSH 会话。
@@ -134,10 +129,10 @@ pub(crate) struct Workspace {
     pub(crate) proc_filter: String,
     /// 概览内容的滚动偏移（逻辑像素）。
     pub(crate) overview_scroll: f32,
-    /// 右侧栏宽度（逻辑像素），拖动分隔条改变。
+    /// 文件栏宽度（逻辑像素），拖动分隔条改变。
+    pub(crate) files_width: f32,
+    /// 概览栏宽度（逻辑像素），拖动分隔条改变。
     pub(crate) side_width: f32,
-    /// 概览是否展开：展开后与文件平分右栏，收起时只留标题条。
-    pub(crate) overview_open: bool,
 }
 
 impl Default for Workspace {
@@ -149,18 +144,13 @@ impl Default for Workspace {
             file_error: None,
             proc_filter: String::new(),
             overview_scroll: 0.0,
+            files_width: 380.0,
             side_width: SIDE_DEFAULT,
-            overview_open: true,
         }
     }
 }
 
-impl Workspace {
-    /// 概览在右栏中的高度占比：展开时一半，收起时只留标题条（0.14）。
-    pub(crate) fn overview_share(&self) -> f32 {
-        if self.overview_open { 0.5 } else { 0.14 }
-    }
-}
+
 
 impl Workspace {
     /// 按当前过滤关键字筛出的进程下标与条目。

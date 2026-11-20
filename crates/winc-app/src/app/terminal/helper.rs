@@ -466,13 +466,19 @@ impl App {
                 };
                 let shell = chosen.as_deref().or(shell.as_deref());
                 let launch = launch(shell, dir.clone(), cfg!(windows), integrated);
+                // 启动方式自带的变量（远端登录的 askpass）覆盖继承来的同名项。
+                let mut env = environment(prompt, python);
+                for (k, v) in &launch.env {
+                    env.retain(|(name, _)| name != k);
+                    env.push((k.clone(), v.clone()));
+                }
                 client.send(&ToHelper::Spawn {
                     tab: id,
                     program: launch.program,
                     args: launch.args,
                     login: launch.login,
                     cwd: launch.cwd,
-                    env: environment(prompt, python),
+                    env,
                     scrollback,
                     size,
                     integration: integration.clone(),
@@ -970,6 +976,8 @@ pub(super) struct Launch {
     pub(super) args: Vec<Vec<u8>>,
     pub(super) login: bool,
     pub(super) cwd: Vec<u8>,
+    /// 只给这个命令追加的环境变量（远端登录时的 askpass 通道）。
+    pub(super) env: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 /// 返回在目录 `cwd` 新建终端时的启动方式。
@@ -1005,6 +1013,7 @@ pub(super) fn launch(
         .into_iter();
     if let Some(program) = words.next() {
         return Launch {
+            env: Vec::new(),
             program: Some(program.into_bytes()),
             args: words.map(String::into_bytes).collect(),
             login: !windows,
@@ -1017,6 +1026,7 @@ pub(super) fn launch(
         .flatten();
     let Some(place) = place else {
         return Launch {
+            env: Vec::new(),
             program: None,
             args: Vec::new(),
             login: true,
@@ -1025,6 +1035,7 @@ pub(super) fn launch(
     };
     let args = ["-d", place.distro.as_str(), "--cd", place.path.as_str()];
     Launch {
+        env: Vec::new(),
         program: Some(b"wsl.exe".to_vec()),
         args: args.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
         login: false,
@@ -1074,12 +1085,35 @@ fn remote_launch(
         "--".to_owned(),
         format!("cd '{dir}' && {start}"),
     ]);
+    // 让 `ssh` 经 askpass 取口令：可以自动用记住的口令回答，也能在对话框里提示。
+    let env = askpass_env();
     Launch {
         program: Some(b"ssh".to_vec()),
         args: args.into_iter().map(String::into_bytes).collect(),
         login: false,
         cwd: Vec::new(),
+        env,
     }
+}
+
+/// 远端终端登录用的 askpass 环境变量。
+///
+/// `ssh` 只在没有 tty、或设置了 `SSH_ASKPASS_REQUIRE=force` 时才用 askpass；这里强制走它，
+/// 口令就能由窗口进程统一回答（记住的口令直接答复，否则弹对话框）。
+fn askpass_env() -> Vec<(Vec<u8>, Vec<u8>)> {
+    let Some(askpass) = crate::app::remote::askpass_for_terminal() else {
+        return Vec::new();
+    };
+    vec![
+        (b"SSH_ASKPASS".to_vec(), os_bytes(askpass.program.as_os_str())),
+        (
+            winc_editor::git::ASKPASS_ENDPOINT.as_bytes().to_vec(),
+            os_bytes(&askpass.endpoint),
+        ),
+        (b"SSH_ASKPASS_REQUIRE".to_vec(), b"force".to_vec()),
+        // `DISPLAY` 在 Windows 上不必需，但部分 `ssh` 版本仍会检查。
+        (b"DISPLAY".to_vec(), b"winc".to_vec()),
+    ]
 }
 
 /// 返回给终端的环境变量；`prompt`、`python` 为假时分别加上 `WINC_PROMPT=0`、`WINC_PYTHON=0`，

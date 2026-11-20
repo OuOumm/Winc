@@ -547,11 +547,8 @@ impl App {
         // SSH 工作区：终端面板占据主体，右侧栏由工作区视图绘制。
         // 放在最大化处理之后，确保 SSH 布局不被覆盖。
         if let Some(ws) = self.remote.ws.as_ref() {
-            let parts = crate::app::ssh_monitor::Parts::new(
-                l.editor,
-                ws.side_width,
-                ws.overview_share(),
-            );
+            let parts =
+                crate::app::ssh_monitor::Parts::new(l.editor, ws.files_width, ws.side_width);
             l.terminal = parts.terminal;
             l.terminal_divider = Rect::default();
         }

@@ -107,11 +107,22 @@ impl App {
                 self.drag_diff_select(x, y, unit, origin, add);
             }
             Drag::DiffColumns { anchor } => self.drag_diff_columns(x, y, anchor),
+            Drag::SshDivider {
+                start_x,
+                start_width,
+            } => {
+                // 往右拖变宽。
+                if let Some(ws) = self.remote.ws.as_mut() {
+                    ws.files_width = (start_width + (x - start_x)).clamp(180.0, 520.0);
+                }
+                self.relayout();
+                self.request_redraw();
+            }
             Drag::SshSideDivider {
                 start_x,
                 start_width,
             } => {
-                // 往左拖变宽：右侧栏的宽度是「总宽 - 鼠标位置」。
+                // 往左拖变宽：概览栏在文件栏右侧，宽度是「起点宽 - 位移」。
                 if let Some(ws) = self.remote.ws.as_mut() {
                     ws.side_width = (start_width - (x - start_x))
                         .clamp(crate::app::ssh_monitor::SIDE_MIN, crate::app::ssh_monitor::SIDE_MAX);

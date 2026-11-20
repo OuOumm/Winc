@@ -199,6 +199,7 @@ impl App {
 
         match self.target_at(x, y) {
             Target::SshWs(t) => Hover::SshWs(t),
+            Target::SshDivider => Hover::SshDivider,
             Target::SshSideDivider => Hover::SshSideDivider,
             Target::WindowControl(control) => Hover::WindowControl(control),
             Target::ResizeEdge(direction) => Hover::ResizeEdge(direction),
@@ -347,11 +348,14 @@ impl App {
         if let Some(t) = hit(&self.hits.ssh_ws, x, y) {
             return Target::SshWs(t);
         }
-        // 右侧栏分隔条紧贴栏边，先于侧栏拦截判断。
-        if let Some(parts) = self.hits.ssh_ws_parts
-            && parts.side_divider.contains(x, y)
-        {
-            return Target::SshSideDivider;
+        // 两条分隔条先于侧栏拦截判断。
+        if let Some(parts) = self.hits.ssh_ws_parts {
+            if parts.divider.contains(x, y) {
+                return Target::SshDivider;
+            }
+            if parts.side_divider.contains(x, y) {
+                return Target::SshSideDivider;
+            }
         }
         // SSH 视图的侧栏区域整体拦截：它没有文件树，点击不该落到下方的文件树逻辑上。
         if self.panels.sidebar.visible
@@ -983,7 +987,9 @@ pub(super) enum Target {
     TabList,
     /// SSH 工作区中的可点击区域。
     SshWs(crate::app::ssh_monitor::SshWsTarget),
-    /// SSH 工作区右侧栏的分隔条。
+    /// SSH 工作区终端与文件之间的分隔条。
+    SshDivider,
+    /// SSH 工作区文件与概览之间的分隔条。
     SshSideDivider,
     /// 标签栏右端「源代码 / 分栏 / 预览」三段切换中的一段。
     Preview(winc_editor::PreviewMode),

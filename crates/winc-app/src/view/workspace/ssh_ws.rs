@@ -22,7 +22,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         return;
     };
     let p = app.palette;
-    let parts = Parts::new(app.layout.editor, ws.side_width, ws.overview_share());
+    let parts = Parts::new(app.layout.editor, ws.files_width, ws.side_width);
 
     // 终端还没建好（辅助进程握手期间）时，在终端栏位置给出提示；
     // 建好后由全局终端面板在同一矩形里绘制。
@@ -47,14 +47,14 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     draw_overview(app, frame, parts.overview, &ws);
 
     // 记录命中区域，供点击处理。
-    // 右侧栏与终端之间的分隔条：按下的位置由命中处理换算成拖动的宽度。
-    let hovered = app.pointer.hover == crate::app::Hover::SshSideDivider;
-    frame.rect_clipped(
-        parts.side_divider.inset(1.5, 0.0),
-        if hovered { p.accent } else { p.hover },
-        0.0,
-        parts.side_divider,
-    );
+    // 两条分隔条：终端|文件、文件|概览，各自高亮。
+    for (area, hover) in [
+        (parts.divider, crate::app::Hover::SshDivider),
+        (parts.side_divider, crate::app::Hover::SshSideDivider),
+    ] {
+        let on = app.pointer.hover == hover;
+        frame.rect_clipped(area.inset(2.5, 0.0), if on { p.accent } else { p.hover }, 0.0, area);
+    }
     app.hits.ssh_ws_parts = Some(parts);
 }
 
@@ -102,31 +102,33 @@ fn draw_files(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_monitor
 
     // 右侧三个按钮：新建目录、上传、上级。
     let mut bx = rect.right() - 6.0;
-    for (label, target) in [
-        (t!("workspace-ssh-up").to_string(), SshWsTarget::FileUp),
-        (t!("workspace-ssh-upload").to_string(), SshWsTarget::Upload),
-        (t!("workspace-ssh-mkdir").to_string(), SshWsTarget::MkDir),
+    // 只放图标，点在窄栏里也够用；悬停时在下方显示文字由 tooltip 承担。
+    for (glyph, target) in [
+        ("↑", SshWsTarget::FileUp),
+        ("⇧", SshWsTarget::Upload),
+        ("＋", SshWsTarget::MkDir),
     ] {
-        let text = format!("{} {}", if target == SshWsTarget::FileUp { "↑" } else { "＋" }, label);
-        let w = frame.measure(FontKind::Ui, app.fonts.ui_small, &text) + 12.0;
-        let b = Rect::new(bx - w, rect.y + 2.0, w, HEAD - 4.0);
+        let b = Rect::new(bx - 24.0, rect.y + 3.0, 24.0, HEAD - 6.0);
         frame.rect_clipped(b, p.hover, crate::theme::RADIUS_ROW, rect);
-        ui_text_small(frame, app, b.x + 6.0, b, &text, p.text_muted, rect);
+        ui_text_small(frame, app, b.x + 8.0, b, glyph, p.text_muted, rect);
         app.hits.ssh_ws.push((b, target));
-        bx = b.x - 4.0;
+        bx = b.x - 3.0;
     }
 
-    // 表头：名称 / 修改时间 / 大小 / 权限 / 属主。
-    let header_y = rect.y + HEAD;
-    let header = Rect::new(rect.x, header_y, rect.w, 18.0);
-    frame.rect_clipped(header, p.hover.alpha(0.25), 0.0, rect);
-    let cols = column_layout(rect.w);
+    // 列按栏宽自适应：窄栏只留名称和大小，宽了才补时间、权限、属主。
+    let show = columns_for(rect.w);
+    let cols = column_layout(rect.w, show);
+    let header_y = rect.y + HEAD + 2.0;
+    let header = Rect::new(rect.x, header_y, rect.w, 20.0);
+    frame.rect_clipped(header, p.hover.alpha(0.55), 0.0, rect);
     for (i, name) in ["名称", "修改时间", "大小", "权限", "属主"].iter().enumerate() {
-        ui_text_small(frame, app, rect.x + PAD + cols[i], header, name, p.text_dim, rect);
+        if show[i] {
+            ui_text_small(frame, app, rect.x + PAD + cols[i], header, name, p.text_dim, rect);
+        }
     }
 
     // 文件行。
-    let mut y = header.bottom() + 2.0;
+    let mut y = header.bottom() + 3.0;
     for i in 0..ws.files.len() {
         if y + ROW > rect.bottom() - 18.0 {
             break;
@@ -138,11 +140,24 @@ fn draw_files(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_monitor
         }
         let icon = if entry.is_dir { "📁" } else { "📄" };
         ui_text_small(frame, app, row.x + PAD, row, icon, p.text_muted, rect);
-        ui_text_small(frame, app, row.x + PAD + cols[0], row, &entry.name, p.text, rect);
-        ui_text_small(frame, app, row.x + PAD + cols[1], row, &entry.time, p.text_dim, rect);
-        ui_text_small(frame, app, row.x + PAD + cols[2], row, &entry.size, p.text_dim, rect);
-        ui_text_small(frame, app, row.x + PAD + cols[3], row, &entry.perm, p.text_dim, rect);
-        ui_text_small(frame, app, row.x + PAD + cols[4], row, &entry.owner, p.text_dim, rect);
+        // 名称占满剩余宽度，过长的截断。
+        // 名称占最靠左那个显示列之前的空间。
+        let first = (0..5).find(|i| *i > 0 && show[*i]).map_or(rect.w, |i| cols[i]);
+        let name_max = (first - 40.0).max(40.0);
+        let name = truncate_end(frame, &entry.name, app.fonts.ui_small, name_max);
+        ui_text_small(frame, app, row.x + PAD + cols[0], row, &name, p.text, rect);
+        if show[1] {
+            ui_text_small(frame, app, row.x + PAD + cols[1], row, &entry.time, p.text_dim, rect);
+        }
+        if show[2] {
+            ui_text_small(frame, app, row.x + PAD + cols[2], row, &entry.size, p.text_dim, rect);
+        }
+        if show[3] {
+            ui_text_small(frame, app, row.x + PAD + cols[3], row, &entry.perm, p.text_dim, rect);
+        }
+        if show[4] {
+            ui_text_small(frame, app, row.x + PAD + cols[4], row, &entry.owner, p.text_dim, rect);
+        }
         // 非目录行右端：下载按钮。
         if !entry.is_dir {
             let dl = Rect::new(row.right() - 16.0, row.y + 3.0, 14.0, ROW - 6.0);
@@ -172,14 +187,41 @@ fn draw_files(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_monitor
     ui_text_small(frame, app, rect.x + PAD, foot, &text, p.text_dim, rect);
 }
 
-/// 文件表各列的横向偏移（相对内容起点），依次为名称、时间、大小、权限、属主。
-fn column_layout(width: f32) -> [f32; 5] {
-    let name = 0.0;
-    let time = (width * 0.40).max(120.0);
-    let size = time + 108.0;
-    let perm = size + 66.0;
-    let owner = perm + 86.0;
-    [name, time, size, perm, owner]
+/// 栏宽够时显示哪些列：名称、时间、大小、权限、属主。名称始终显示。
+fn columns_for(width: f32) -> [bool; 5] {
+    [
+        true,
+        width >= 380.0,
+        width >= 260.0,
+        width >= 460.0,
+        width >= 540.0,
+    ]
+}
+
+/// 文件表各列的横向偏移（相对内容起点）。靠右依次排：属主、权限、时间、大小。
+///
+/// 折叠的列给 0，由调用方跳过；名称从 0 起，宽度由 [`columns_for`] 之外的剩余空间决定。
+fn column_layout(width: f32, show: [bool; 5]) -> [f32; 5] {
+    let mut out = [0.0_f32; 5];
+    // 从右往左排：属主 78、权限 62、时间 118、大小 64。
+    let mut right = (width - 20.0).max(0.0);
+    if show[4] {
+        right -= 78.0;
+        out[4] = right.max(0.0);
+    }
+    if show[3] {
+        right -= 62.0;
+        out[3] = right.max(0.0);
+    }
+    if show[1] {
+        right -= 118.0;
+        out[1] = right.max(0.0);
+    }
+    if show[2] {
+        right -= 64.0;
+        out[2] = right.max(0.0);
+    }
+    out
 }
 
 /// 绘制服务器概览：系统信息、CPU（含每核心）、内存/Swap、网络、磁盘、进程。
@@ -202,21 +244,6 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
     let live = if ov.updated.is_some() { "● " } else { "○ " };
     let title = format!("{}{} — {}", live, t!("workspace-ssh-overview"), session.target.host());
     ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, rect.y + PAD, rect.w, 18.0), &title, p.text, clip);
-    let toggle = Rect::new(rect.right() - 22.0, rect.y + 2.0, 18.0, 18.0);
-    ui_text_small(
-        frame,
-        app,
-        toggle.x + 3.0,
-        toggle,
-        if ws.overview_open { "▾" } else { "▸" },
-        p.text_muted,
-        clip,
-    );
-    app.hits.ssh_ws.push((toggle, SshWsTarget::ToggleOverview));
-    // 收起时只留标题条。
-    if !ws.overview_open {
-        return;
-    }
     let mut y = rect.y + PAD + title_h - scroll;
 
     if let Some(err) = &session.error {
@@ -225,7 +252,7 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
     }
 
     // 系统信息（两列）。
-    section_title(app, frame, rect, &mut y, "系统信息");
+    section_title(app, frame, rect, clip, &mut y, "系统信息");
     for (k, v) in ov.system.iter() {
         if y + 16.0 > clip.bottom() {
             return;
@@ -239,7 +266,7 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
 
     // CPU：总占用 + 每核心。
     y += 6.0;
-    section_title(app, frame, rect, &mut y, "CPU");
+    section_title(app, frame, rect, clip, &mut y, "CPU");
     y = draw_bar(app, frame, rect, y, "总占用", ov.cpu_total, p.accent);
     if !ov.cpu_cores.is_empty() && y + 20.0 < clip.bottom() {
         // 每核心两列，最多显示 8 个。
@@ -275,15 +302,15 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
     }
 
     // 内存与 Swap。
-    section_title(app, frame, rect, &mut y, "内存 / 交换");
+    section_title(app, frame, rect, clip, &mut y, "内存 / 交换");
     let mem_used = format!("{} / {}", fmt_mb(ov.memory.0), fmt_mb(ov.memory.1));
-    y = draw_bar_with(app, frame, rect, y, ("物理内存", mem_used), (pct(ov.memory.0, ov.memory.1), p.accent));
+    y = draw_bar_with(app, frame, rect, y, ("物理内存", mem_used), (pct(ov.memory.0, ov.memory.1), p.accent), clip);
     let swap_used = format!("{} / {}", fmt_mb(ov.swap.0), fmt_mb(ov.swap.1));
-    y = draw_bar_with(app, frame, rect, y, ("Swap", swap_used), (pct(ov.swap.0, ov.swap.1), p.accent.alpha(0.6)));
+    y = draw_bar_with(app, frame, rect, y, ("Swap", swap_used), (pct(ov.swap.0, ov.swap.1), p.accent.alpha(0.6)), clip);
 
     // 网络：速率 + 折线 + 接口。
     if y + 40.0 < clip.bottom() {
-        section_title(app, frame, rect, &mut y, "网络");
+        section_title(app, frame, rect, clip, &mut y, "网络");
         let rx = format_rate(ov.net_rx_now);
         let tx = format_rate(ov.net_tx_now);
         let row = Rect::new(rect.x, y, rect.w, 16.0);
@@ -308,7 +335,7 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
 
     // 磁盘挂载。
     if y + 20.0 < clip.bottom() {
-        section_title(app, frame, rect, &mut y, "磁盘挂载");
+        section_title(app, frame, rect, clip, &mut y, "磁盘挂载");
         for (mount, fs, percent, used) in ov.mounts.iter().take(4) {
             if y + 24.0 > clip.bottom() {
                 break;
@@ -327,7 +354,7 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
 
     // 进程：过滤框 + 列表 + kill。
     if y + 22.0 < clip.bottom() {
-        section_title(app, frame, rect, &mut y, "进程");
+        section_title(app, frame, rect, clip, &mut y, "进程");
         let filter = Rect::new(rect.x + PAD, y, rect.w - 2.0 * PAD, 18.0);
         frame.rect_clipped(filter, p.hover.alpha(0.4), 4.0, clip);
         let text = if ws.proc_filter.is_empty() {
@@ -359,8 +386,8 @@ fn draw_overview(app: &mut App, frame: &mut Frame<'_>, rect: Rect, ws: &ssh_moni
 }
 
 /// 小节标题。
-fn section_title(app: &mut App, frame: &mut Frame<'_>, rect: Rect, y: &mut f32, text: &str) {
-    if *y + 18.0 > rect.bottom() {
+fn section_title(app: &mut App, frame: &mut Frame<'_>, rect: Rect, clip: Rect, y: &mut f32, text: &str) {
+    if *y + 18.0 > clip.bottom() {
         return;
     }
     ui_text_small(frame, app, rect.x + PAD, Rect::new(rect.x, *y, rect.w, 16.0), text, app.palette.text_muted, rect);
@@ -389,9 +416,10 @@ fn draw_bar_with(
     y: f32,
     (label, value): (&str, String),
     (pct, color): (f32, Color),
+    clip: Rect,
 ) -> f32 {
     let p = app.palette;
-    if y + 24.0 > rect.bottom() {
+    if y + 25.0 > clip.bottom() {
         return y;
     }
     let row = Rect::new(rect.x, y, rect.w, 14.0);

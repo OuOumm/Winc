@@ -175,6 +175,10 @@ impl App {
         if event.state != ElementState::Pressed {
             return;
         }
+        // 正在等终端口令：字符先攒着，回车提交，不送进 pty。
+        if self.remote.terminal_password.is_some() && self.terminal_password_key(event) {
+            return;
+        }
         if !matches!(
             event.logical_key,
             Key::Named(

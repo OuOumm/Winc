@@ -224,6 +224,13 @@ impl App {
                     start_width: self.panels.sidebar.width.min(most),
                 };
             }
+            Target::SshDivider => {
+                let width = self.remote.ws.as_ref().map(|w| w.files_width).unwrap_or(0.0);
+                self.pointer.drag = Drag::SshDivider {
+                    start_x: x,
+                    start_width: width,
+                };
+            }
             Target::SshSideDivider => {
                 let width = self.remote.ws.as_ref().map(|w| w.side_width).unwrap_or(0.0);
                 self.pointer.drag = Drag::SshSideDivider {

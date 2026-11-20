@@ -124,6 +124,31 @@ impl Prompt {
                 }
         )
     }
+
+    /// 提示原文的简写：终端里显示的提示行。
+    pub fn text(&self) -> String {
+        match self {
+            Prompt::SshPassword { account, host } => format!("{account}@{host}'s password:"),
+            Prompt::Passphrase { key } => format!("Passphrase for key '{key}':"),
+            Prompt::HostKey { host, .. } => format!("Confirm host key of {host}?"),
+            Prompt::Other { text, .. } => text.clone(),
+            Prompt::Username { server } => format!("Username for '{server}':"),
+            Prompt::Password { server, .. } => format!("Password for '{server}':"),
+        }
+    }
+
+    /// 这次询问涉及的主机（用于查记住的口令）。
+    pub fn host_hint(&self) -> Option<String> {
+        match self {
+            Prompt::SshPassword { host, .. } | Prompt::HostKey { host, .. } => Some(host.clone()),
+            Prompt::Other { text, .. } => {
+                // `user@host's password:` 形式。
+                let head = text.split('\'').next()?.trim();
+                head.rsplit_once('@').map(|(_, host)| host.to_owned())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// 解析用户名、密码和私钥口令的提示；不符合这些格式时返回 `None`。

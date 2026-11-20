@@ -212,6 +212,10 @@ pub(crate) struct RemoteState {
     pub(crate) asset_filter: String,
     /// 资产搜索框是否在接收键盘输入。
     pub(crate) asset_editing: bool,
+    /// 正在等用户回答的终端口令询问：(主机, 提示文字, 待答复的请求)。
+    pub(crate) terminal_password: Option<(Option<String>, String, Question)>,
+    /// 上一条里用户已经敲下的口令字符。
+    pub(crate) terminal_password_input: String,
     /// SSH 工作区（终端 + 文件 + 服务器概览）；没有会话时为 `None`。
     pub(crate) ws: Option<crate::app::ssh_monitor::Workspace>,
     /// 后台采集概览的回传槽。
@@ -242,6 +246,8 @@ impl Default for RemoteState {
             proc_editing: false,
             asset_filter: String::new(),
             asset_editing: false,
+            terminal_password: None,
+            terminal_password_input: String::new(),
             ws: None,
             monitor: Arc::default(),
             ssh_files: Arc::default(),
@@ -907,6 +913,39 @@ pub(crate) fn host_endpoint(host: &str) -> Option<(Option<String>, String, Optio
     Some((user, addr, port))
 }
 
+/// 为终端里的 `ssh` 登录准备 askpass 通道，返回要注入的环境变量来源。
+///
+/// 询问被转到本窗口（见 [`App::poll_terminal_questions`]）：是口令且记过就自动答，
+/// 其余写成一条提示由用户回答。监听器是进程级的一份，首次用到时建立。
+pub(crate) fn askpass_for_terminal() -> Option<winc_editor::git::Askpass> {
+    let mut slot = TERMINAL_ASKPASS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(askpass) = slot.as_ref() {
+        return Some(askpass.clone());
+    }
+    let listener = Listener::bind(true, |question| {
+        TERMINAL_QUESTIONS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(question);
+    })?;
+    let askpass = listener.askpass()?;
+    *slot = Some(askpass.clone());
+    Some(askpass)
+}
+
+/// 终端 askpass 的监听器：进程级一份，首次用到时建立。
+static TERMINAL_ASKPASS: Mutex<Option<winc_editor::git::Askpass>> = Mutex::new(None);
+
+/// 等窗口处理的下一个问题。
+static TERMINAL_QUESTIONS: Mutex<Vec<Question>> = Mutex::new(Vec::new());
+
+/// 确认类的终端询问（主机密钥）回答 `yes`。
+fn winc_app_confirm(_line: &str) -> String {
+    "yes".to_owned()
+}
+
 /// 本机下载目录：用户主目录下的 `Downloads`，没有时回退主目录或临时目录。
 fn download_dir() -> std::path::PathBuf {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -1221,6 +1260,89 @@ impl App {
         self.request_redraw();
     }
 
+    /// 处理终端 askpass 转来的询问：记过口令的直接答，其余写进终端提示等用户输入。
+    pub(in crate::app) fn poll_terminal_questions(&mut self) {
+        loop {
+            let Some(question) = TERMINAL_QUESTIONS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop()
+            else {
+                break;
+            };
+            // 从提示文字里认出主机（`root@h's password:` 的 `h`）。
+            let host = question
+                .prompt
+                .host_hint()
+                .and_then(|h| Target::new(&h))
+                .map(|t| t.as_str().to_owned());
+            if question.is_password()
+                && let Some(host) = host.as_deref()
+                && let Some(saved) = self.state.remote_password(host)
+            {
+                question.reply(saved.to_owned());
+                continue;
+            }
+            // 没记住：把提示塞进终端前的输入行，用户这次回答后由下面的 key 钩子存下。
+            self.remote.terminal_password = Some((
+                host,
+                question.prompt.text().to_owned(),
+                question,
+            ));
+            self.request_redraw();
+        }
+    }
+
+    /// 等终端口令时的按键：可打印字符攒进缓冲，退格删除，回车提交，Esc 取消。
+    ///
+    /// 返回是否消费了该按键。
+    pub(in crate::app) fn terminal_password_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+        match &event.logical_key {
+            Key::Character(text) => {
+                self.remote.terminal_password_input.push_str(text);
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::Backspace) => {
+                self.remote.terminal_password_input.pop();
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::Enter) => {
+                let line = std::mem::take(&mut self.remote.terminal_password_input);
+                self.answer_terminal_password(&line);
+                true
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.remote.terminal_password = None;
+                self.remote.terminal_password_input.clear();
+                self.request_redraw();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 若正在等终端口令输入，把 `line` 作为答复发回，并记住它。
+    pub(in crate::app) fn answer_terminal_password(&mut self, line: &str) {
+        let Some((host, _prompt, question)) = self.remote.terminal_password.take() else {
+            return;
+        };
+        let answer = if question.is_password() {
+            line.to_owned()
+        } else {
+            winc_app_confirm(line)
+        };
+        question.reply(answer.clone());
+        if question.is_password()
+            && let Some(host) = host
+        {
+            self.update_state(|state| state.set_remote_password(&host, &answer));
+        }
+        self.request_redraw();
+    }
+
     /// 处理 SSH 工作区中的点击。
     pub(crate) fn press_ssh_ws(&mut self, target: crate::app::ssh_monitor::SshWsTarget) {
         use crate::app::ssh_monitor::SshWsTarget;
@@ -1319,13 +1441,6 @@ impl App {
                 // 聚焦进程过滤框：之后键入的字符进入过滤关键字。
                 self.remote.proc_editing = true;
                 self.remote.asset_editing = false;
-                self.request_redraw();
-            }
-            SshWsTarget::ToggleOverview => {
-                if let Some(ws) = self.remote.ws.as_mut() {
-                    ws.overview_open = !ws.overview_open;
-                }
-                self.relayout();
                 self.request_redraw();
             }
             SshWsTarget::Close => self.ssh_close_workspace(),
